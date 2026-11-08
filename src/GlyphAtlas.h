@@ -16,8 +16,10 @@ void atlas_metrics(const GlyphAtlas *a, int *cell_w, int *cell_h);
 
 /* Texture coordinates {u0, v0, u1, v1} of the glyph for code point cp,
  * rasterizing and uploading it on first use. wide = 2 for a double-width
- * cell. v0 is the top of the cell. */
-void atlas_lookup(GlyphAtlas *a, uint32_t cp, int bold, int wide, float uv[4]);
+ * cell; style is ATLAS_BOLD|ATLAS_ITALIC. v0 is the top of the cell. */
+#define ATLAS_BOLD	1
+#define ATLAS_ITALIC	2
+void atlas_lookup(GlyphAtlas *a, uint32_t cp, int style, int wide, float uv[4]);
 
 GLuint atlas_texture(GlyphAtlas *a);
 

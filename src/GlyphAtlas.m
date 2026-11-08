@@ -3,7 +3,7 @@
  *
  * Every slot is two cells wide (so a double-width glyph fits) and one cell
  * high; slot 0 stays blank and is what a space maps to. Lookups go through a
- * small open-addressed table keyed by code point and boldness. When the
+ * small open-addressed table keyed by code point and style. When the
  * atlas fills it is cleared and refilled from the glyphs on screen, which a
  * terminal's working set never comes near.
  *
@@ -16,6 +16,10 @@
  * box-drawing lines are drawn here instead of taken from a font: btop and
  * friends build graphs and frames from them, and a fallback font's glyphs do
  * not fill the cell exactly, which shows as gaps and steps.
+ *
+ * Bold and italic use the family's own faces when Core Text finds them
+ * (Hack Nerd Font Mono ships all four); a family without them, Monaco among
+ * them, gets a stroked bold and a sheared italic instead.
  */
 #include "GlyphAtlas.h"
 
@@ -30,7 +34,9 @@
 struct entry { uint32_t key; uint16_t slot; uint16_t used; };
 
 struct GlyphAtlas {
-	CTFontRef	font, bold;
+	CTFontRef	font;
+	CTFontRef	face[4];		/* indexed by ATLAS_BOLD|ATLAS_ITALIC */
+	int		synth[4];		/* the same bits, where faked */
 	int		cell_w, cell_h;
 	float		descent;
 	int		slot_w, slots_x, slots_y, next_slot;
@@ -40,6 +46,39 @@ struct GlyphAtlas {
 	struct entry	table[TABLE_SIZE];
 };
 
+/*
+ * The face for a style, from the font's own family when it has one. Core
+ * Text hands back the same face, or NULL, when the family lacks the trait,
+ * so the PostScript names are compared rather than trusting a non-NULL
+ * result.
+ */
+static CTFontRef style_face(CTFontRef base, int style, int *synth)
+{
+	CTFontSymbolicTraits t = ((style & ATLAS_BOLD) ? kCTFontBoldTrait : 0) |
+				 ((style & ATLAS_ITALIC) ? kCTFontItalicTrait : 0);
+	CTFontRef f = CTFontCreateCopyWithSymbolicTraits(base, 0, NULL, t, t);
+	CTFontSymbolicTraits got;
+
+	if (f == NULL) {
+		*synth = style;
+		return (CTFontRef)CFRetain(base);
+	}
+	got = CTFontGetSymbolicTraits(f);
+	*synth = 0;
+	if ((style & ATLAS_BOLD) && !(got & kCTFontBoldTrait))
+		*synth |= ATLAS_BOLD;
+	if ((style & ATLAS_ITALIC) && !(got & kCTFontItalicTrait))
+		*synth |= ATLAS_ITALIC;
+	{
+		CFStringRef bn = CTFontCopyPostScriptName(base), fn = CTFontCopyPostScriptName(f);
+		if (CFStringCompare(bn, fn, 0) == kCFCompareEqualTo)
+			*synth = style;
+		CFRelease(bn);
+		CFRelease(fn);
+	}
+	return f;
+}
+
 GlyphAtlas *atlas_create(const char *font_name, float point_size)
 {
 	GlyphAtlas *a = calloc(1, sizeof *a);
@@ -48,13 +87,13 @@ GlyphAtlas *atlas_create(const char *font_name, float point_size)
 	CGGlyph g;
 	CGSize adv;
 	CGColorSpaceRef gray;
+	int i;
 
 	a->font = CTFontCreateWithName(name, point_size, NULL);
 	CFRelease(name);
-	a->bold = CTFontCreateCopyWithSymbolicTraits(a->font, 0, NULL,
-						     kCTFontBoldTrait, kCTFontBoldTrait);
-	if (a->bold == NULL)
-		a->bold = (CTFontRef)CFRetain(a->font);
+	a->face[0] = (CTFontRef)CFRetain(a->font);
+	for (i = 1; i < 4; i++)
+		a->face[i] = style_face(a->font, i, &a->synth[i]);
 
 	CTFontGetGlyphsForCharacters(a->font, &m, &g, 1);
 	CTFontGetAdvancesForGlyphs(a->font, kCTFontDefaultOrientation, &g, &adv, 1);
@@ -74,6 +113,7 @@ GlyphAtlas *atlas_create(const char *font_name, float point_size)
 				       gray, kCGImageAlphaNone);
 	CGColorSpaceRelease(gray);
 	CGContextSetGrayFillColor(a->ctx, 1.0, 1.0);
+	CGContextSetGrayStrokeColor(a->ctx, 1.0, 1.0);
 	CGContextSetShouldAntialias(a->ctx, true);
 	CGContextSetShouldSmoothFonts(a->ctx, false);
 	return a;
@@ -81,6 +121,8 @@ GlyphAtlas *atlas_create(const char *font_name, float point_size)
 
 void atlas_destroy(GlyphAtlas *a)
 {
+	int i;
+
 	if (!a)
 		return;
 	if (a->tex)
@@ -88,7 +130,8 @@ void atlas_destroy(GlyphAtlas *a)
 	CGContextRelease(a->ctx);
 	free(a->bitmap);
 	CFRelease(a->font);
-	CFRelease(a->bold);
+	for (i = 0; i < 4; i++)
+		CFRelease(a->face[i]);
 	free(a);
 }
 
@@ -243,9 +286,9 @@ static int draw_box(GlyphAtlas *a, uint32_t cp, int w)
 
 /* ---- font glyphs ----------------------------------------------------- */
 
-static void draw_font_glyph(GlyphAtlas *a, uint32_t cp, int bold)
+static void draw_font_glyph(GlyphAtlas *a, uint32_t cp, int style)
 {
-	CTFontRef f = bold ? a->bold : a->font;
+	CTFontRef f = a->face[style];
 	CTFontRef use = f, fallback = NULL;
 	UniChar u[2];
 	CGGlyph g[2] = { 0, 0 };
@@ -272,6 +315,16 @@ static void draw_font_glyph(GlyphAtlas *a, uint32_t cp, int bold)
 	cg = CTFontCopyGraphicsFont(use, NULL);
 	CGContextSetFont(a->ctx, cg);
 	CGContextSetFontSize(a->ctx, CTFontGetSize(use));
+	/* Shear about the baseline, 0.2 being about 11 degrees, the slant of
+	 * a typical oblique; stroke with 1/24 em, about one step of weight. */
+	CGContextSetTextMatrix(a->ctx, (a->synth[style] & ATLAS_ITALIC)
+			       ? CGAffineTransformMake(1, 0, 0.2f, 1, 0, 0)
+			       : CGAffineTransformIdentity);
+	if (a->synth[style] & ATLAS_BOLD) {
+		CGContextSetTextDrawingMode(a->ctx, kCGTextFillStroke);
+		CGContextSetLineWidth(a->ctx, CTFontGetSize(use) / 24);
+	} else
+		CGContextSetTextDrawingMode(a->ctx, kCGTextFill);
 	CGContextShowGlyphsAtPoint(a->ctx, 0, a->descent, g, 1);
 	CGFontRelease(cg);
 out:
@@ -291,9 +344,12 @@ static void slot_uv(const GlyphAtlas *a, int slot, int wide, float uv[4])
 	uv[3] = (float)(sy + a->cell_h) / ATLAS_SIZE;
 }
 
-void atlas_lookup(GlyphAtlas *a, uint32_t cp, int bold, int wide, float uv[4])
+void atlas_lookup(GlyphAtlas *a, uint32_t cp, int style, int wide, float uv[4])
 {
-	uint32_t key = cp | (bold ? 0x80000000u : 0) | (wide == 2 ? 0x40000000u : 0);
+	/* Code points stop at 21 bits; style takes 29 and 31, width 30. */
+	uint32_t key = cp | ((style & ATLAS_BOLD) ? 0x80000000u : 0) |
+		       ((style & ATLAS_ITALIC) ? 0x20000000u : 0) |
+		       (wide == 2 ? 0x40000000u : 0);
 	unsigned h = (key * 2654435761u) & (TABLE_SIZE - 1);
 	int slot, w = wide * a->cell_w;
 
@@ -322,7 +378,7 @@ void atlas_lookup(GlyphAtlas *a, uint32_t cp, int bold, int wide, float uv[4])
 	if (!((cp >= 0x2800 && cp <= 0x28FF && draw_braille(a, cp, w)) ||
 	      (cp >= 0x2580 && cp <= 0x259F && draw_block(a, cp, w)) ||
 	      (cp >= 0x2500 && cp <= 0x257F && draw_box(a, cp, w))))
-		draw_font_glyph(a, cp, bold);
+		draw_font_glyph(a, cp, style & 3);
 	CGContextFlush(a->ctx);
 
 	glBindTexture(GL_TEXTURE_2D, atlas_texture(a));

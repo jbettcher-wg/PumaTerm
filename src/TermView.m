@@ -453,7 +453,8 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 				memcpy(t, fg, 4); memcpy(fg, bg, 4); memcpy(bg, t, 4);
 			}
 			atlas_lookup(atlas, cell.attrs.conceal ? ' ' : cell.chars[0],
-				     cell.attrs.bold, wide, uv);
+				     (cell.attrs.bold ? ATLAS_BOLD : 0) |
+				     (cell.attrs.italic ? ATLAS_ITALIC : 0), wide, uv);
 
 			x0 = c * cellW;
 			x1 = x0 + wide * cellW;

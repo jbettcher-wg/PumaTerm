@@ -23,6 +23,18 @@ Build natively on a board (Apple's gcc-4.2: Objective-C and the 10.5 SDK):
     cp -R build/Term.app /Applications/
 
 Defaults: `defaults write org.xnu-t4240.term Font Monaco`, `FontSize 12`.
+`Font` is the **PostScript** name, not the file or family name: an unknown
+name silently falls back to a proportional system face (which shows as wide
+gaps between letters).
+
+Nerd Fonts work on 10.5 as they ship. Measured on board 1 with Hack Nerd Font
+Mono v3.4.0 (`HackNerdFontMono-*.ttf` into `/Library/Fonts`, then
+`Font HackNFM-Regular`): powerline (U+E0B0), devicons (U+E711) and the
+Material Design set in plane 15 (U+F0001), so Leopard reads the font's
+format 12 cmap and the surrogate path here reaches it. Use the *Mono*
+variant: its icons are one cell wide, as a cell grid needs. A family's own
+bold and italic faces are used when Core Text finds them; Monaco, which
+has neither, gets a stroked bold and a sheared italic.
 Shift-PageUp/PageDown and the scroll wheel scroll back; Cmd-V pastes
 (bracketed); Option is Meta.
 
