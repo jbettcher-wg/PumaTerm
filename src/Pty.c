@@ -20,7 +20,7 @@
 #include <unistd.h>
 #include <util.h>
 
-int pty_spawn(int rows, int cols, pid_t *pid)
+int pty_spawn(int rows, int cols, const char *command, pid_t *pid)
 {
 	struct winsize ws;
 	int master = -1;
@@ -40,6 +40,25 @@ int pty_spawn(int rows, int cols, pid_t *pid)
 		struct passwd *pw = getpwuid(getuid());
 		char argv0[256];
 
+		/* A command with arguments runs under /bin/sh; a bare path is
+		 * started as a login shell in its own right, so choosing
+		 * /opt/local/bin/zsh behaves like a changed login shell. */
+		if (command && *command && strchr(command, ' ')) {
+			if (pw && pw->pw_dir)
+				chdir(pw->pw_dir);
+			setenv("TERM", "xterm-256color", 1);
+			setenv("COLORTERM", "truecolor", 1);
+			setenv("TERM_PROGRAM", "PumaTerm", 1);
+			if (getenv("LANG") == NULL && getenv("LC_ALL") == NULL)
+				setenv("LANG", "en_US.UTF-8", 1);
+			signal(SIGINT, SIG_DFL);
+			signal(SIGQUIT, SIG_DFL);
+			signal(SIGCHLD, SIG_DFL);
+			execl("/bin/sh", "sh", "-c", command, (char *)NULL);
+			_exit(127);
+		}
+		if (command && *command)
+			shell = command;
 		if ((shell == NULL || *shell == '\0') && pw && pw->pw_shell && *pw->pw_shell)
 			shell = pw->pw_shell;
 		if (shell == NULL || *shell == '\0')

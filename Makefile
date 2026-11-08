@@ -8,7 +8,7 @@ ARCH    ?= -arch ppc
 CFLAGS  += $(ARCH) -O2 -g -Wall -mmacosx-version-min=10.5 \
            -Ivendor/libvterm/include -Ivendor/libvterm/src
 VTERM_SRC := $(wildcard vendor/libvterm/src/*.c)
-APP_SRC   := src/main.m src/TermWindow.m src/TermView.m src/GlyphAtlas.m src/Pty.c
+APP_SRC   := src/main.m src/Prefs.m src/PrefsWindow.m src/TermWindow.m src/TermView.m src/GlyphAtlas.m src/Pty.c
 OBJ := $(patsubst %.c,build/obj/%.o,$(VTERM_SRC)) \
        $(patsubst %.m,build/obj/%.o,$(filter %.m,$(APP_SRC))) \
        $(patsubst %.c,build/obj/%.o,$(filter %.c,$(APP_SRC)))

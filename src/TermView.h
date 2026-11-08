@@ -50,11 +50,24 @@ typedef struct {
 	float		*verts;			/* x y u v per vertex */
 	GLubyte		*fgc, *bgc;		/* rgba per vertex */
 	int		 vertCap;
+
+	/* From the preferences (applyPrefs). */
+	int		 sbSize;
+	float		 bgAlpha;		/* default background opacity */
+	unsigned char	 cursorRGB[3], selRGB[3];
+	int		 cursorShape, bellMode;
+	BOOL		 cursorBlink, blinkOn, optionMeta, flashing;
+	NSTimer		*blinkTimer, *dumpTimer;
 }
 - (id)initWithFrame:(NSRect)frame fontName:(NSString *)font size:(float)size;
 - (NSSize)cellSize;
 - (void)startShell;
 - (NSString *)title;
+- (int)columns;
+- (int)rows;
+- (void)applyPrefs;		/* re-read settings; may change cellSize */
+- (void)ringBell;
+- (void)shutdown;		/* stop timers, hang up: before release */
 - (NSString *)selectionText;
 - (void)copy:(id)sender;
 @end

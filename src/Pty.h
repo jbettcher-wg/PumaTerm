@@ -3,10 +3,11 @@
 #define TERM_PTY_H
 #include <sys/types.h>
 
-/* Start the user's login shell on a new pseudo-terminal of rows x cols.
- * Returns the master fd (blocking, close-on-exec) and the child's pid
- * through *pid, or -1. */
-int  pty_spawn(int rows, int cols, pid_t *pid);
+/* Start the user's login shell on a new pseudo-terminal of rows x cols,
+ * or command when it is set: a bare path runs as a login shell, anything
+ * with arguments under /bin/sh -c. Returns the master fd (blocking,
+ * close-on-exec) and the child's pid through *pid, or -1. */
+int  pty_spawn(int rows, int cols, const char *command, pid_t *pid);
 
 /* Tell the kernel (and so the shell's SIGWINCH) the new size. */
 void pty_resize(int fd, int rows, int cols, int px_w, int px_h);

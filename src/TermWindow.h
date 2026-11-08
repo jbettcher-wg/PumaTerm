@@ -19,8 +19,10 @@ extern NSString *const TermWindowClosedNotification;
 	NSString	*fontName;
 	float		 fontSize;
 	NSSize		 cell;
+	void		*blurFilter;		/* CGSWindowFilterRef */
 }
-- (id)initWithFont:(NSString *)font size:(float)size cascadeFrom:(NSPoint *)cascade;
+/* Font, size and colours come from the preferences. */
+- (id)initWithCascadeFrom:(NSPoint *)cascade;
 - (NSWindow *)window;
 - (NSArray *)views;
 - (int)activeIndex;

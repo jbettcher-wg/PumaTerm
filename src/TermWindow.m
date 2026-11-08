@@ -10,10 +10,25 @@
  */
 #import "TermWindow.h"
 #import "TermView.h"
+#import "Prefs.h"
 #include <stdlib.h>
 
-#define DEFAULT_COLS	100
-#define DEFAULT_ROWS	32
+/*
+ * Blurring what is behind a translucent window: CoreGraphics' private
+ * window filters, which 10.5 exports (measured with nm on board 1:
+ * CGSNewCIFilterByName, CGSAddWindowFilter, CGSSetCIFilterValuesFromDictionary)
+ * and which iTerm used on 10.5 before 10.6 gave it a background blur radius.
+ * Flags 0x3001 apply the filter to the backdrop rather than the window.
+ */
+typedef int CGSConnectionID;
+typedef void *CGSWindowFilterRef;
+extern CGSConnectionID _CGSDefaultConnection(void);
+extern CGError CGSNewCIFilterByName(CGSConnectionID, CFStringRef, CGSWindowFilterRef *);
+extern CGError CGSAddWindowFilter(CGSConnectionID, int, CGSWindowFilterRef, int);
+extern CGError CGSRemoveWindowFilter(CGSConnectionID, int, CGSWindowFilterRef);
+extern CGError CGSSetCIFilterValuesFromDictionary(CGSConnectionID, CGSWindowFilterRef, CFDictionaryRef);
+extern CGError CGSReleaseCIFilter(CGSConnectionID, CGSWindowFilterRef);
+
 #define BAR_H		22
 
 NSString *const TermWindowClosedNotification = @"TermWindowClosed";
@@ -93,28 +108,34 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 
 @interface TermWindow ()
 - (void)layout;
+- (void)applyWindowPrefs;
+- (void)prefsChanged:(NSNotification *)n;
 - (void)shellExited:(NSNotification *)n;
 - (void)titleChanged:(NSNotification *)n;
 @end
 
 @implementation TermWindow
 
-- (id)initWithFont:(NSString *)font size:(float)size cascadeFrom:(NSPoint *)cascade
+- (id)initWithCascadeFrom:(NSPoint *)cascade
 {
+	NSUserDefaults *u = [NSUserDefaults standardUserDefaults];
+	int ncols = [u integerForKey:kPrefColumns], nrows = [u integerForKey:kPrefRows];
 	TermView *probe;
 	NSRect frame;
 
 	if ((self = [super init]) == nil)
 		return nil;
-	fontName = [font retain];
-	fontSize = size;
+	fontName = [prefs_font(&fontSize) retain];
 	views = [[NSMutableArray alloc] init];
+	if (ncols < 20) ncols = 20;
+	if (nrows < 5) nrows = 5;
 
 	/* Size the window to whole cells. */
-	probe = [[TermView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100) fontName:font size:size];
+	probe = [[TermView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100) fontName:fontName size:fontSize];
 	cell = [probe cellSize];
+	[probe shutdown];
 	[probe release];
-	frame = NSMakeRect(0, 0, cell.width * DEFAULT_COLS, cell.height * DEFAULT_ROWS);
+	frame = NSMakeRect(0, 0, cell.width * ncols, cell.height * nrows);
 
 	window = [[NSWindow alloc] initWithContentRect:frame
 		styleMask:NSTitledWindowMask | NSClosableWindowMask |
@@ -136,6 +157,9 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 
 	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(layout)
 		name:NSViewFrameDidChangeNotification object:container];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(prefsChanged:)
+		name:PrefsChangedNotification object:nil];
+	[self applyWindowPrefs];
 	[self newTab:nil];
 	{
 		/* Test hook: PUMATERM_TEST_TABS=n opens n tabs and, a few seconds
@@ -160,6 +184,69 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 }
 
 - (NSWindow *)window	{ return window; }
+
+/* Opacity and blur belong to the window: a translucent terminal needs a
+ * non-opaque window with a clear background behind its GL surface. */
+- (void)applyWindowPrefs
+{
+	NSUserDefaults *u = [NSUserDefaults standardUserDefaults];
+	BOOL clear = [u floatForKey:kPrefOpacity] < 1;
+	BOOL blur = clear && [u boolForKey:kPrefBlur];
+	CGSConnectionID cid = _CGSDefaultConnection();
+
+	[window setOpaque:!clear];
+	[window setBackgroundColor:clear ? [NSColor clearColor] : [NSColor blackColor]];
+	if (blurFilter && !blur) {
+		CGSRemoveWindowFilter(cid, (int)[window windowNumber], blurFilter);
+		CGSReleaseCIFilter(cid, blurFilter);
+		blurFilter = NULL;
+	}
+	if (blur) {
+		NSDictionary *d = [NSDictionary dictionaryWithObject:
+			[NSNumber numberWithFloat:[u floatForKey:kPrefBlurRadius]] forKey:@"inputRadius"];
+		if (blurFilter == NULL &&
+		    CGSNewCIFilterByName(cid, CFSTR("CIGaussianBlur"), &blurFilter) == 0)
+			CGSAddWindowFilter(cid, (int)[window windowNumber], blurFilter, 0x3001);
+		if (blurFilter)
+			CGSSetCIFilterValuesFromDictionary(cid, blurFilter, (CFDictionaryRef)d);
+	}
+	[window invalidateShadow];
+}
+
+/* Every tab re-reads the settings. If the font changed the cell size,
+ * the window is resized to keep the selected terminal's rows and columns,
+ * and resizing snaps to the new cell. */
+- (void)prefsChanged:(NSNotification *)n
+{
+	TermView *v;
+	int c, r;
+	NSSize nc;
+	NSEnumerator *e = [views objectEnumerator];
+
+	(void)n;
+	if ([views count] == 0)
+		return;
+	v = [views objectAtIndex:active];
+	c = [v columns];
+	r = [v rows];
+	while ((v = [e nextObject]) != nil)
+		[v applyPrefs];
+	[self applyWindowPrefs];
+	[fontName release];
+	fontName = [prefs_font(&fontSize) retain];
+	nc = [[views objectAtIndex:active] cellSize];
+	if (!NSEqualSizes(nc, cell)) {
+		NSRect f = [window frame];
+		NSRect content = [window contentRectForFrameRect:f];
+		float h = r * nc.height + ([views count] > 1 ? BAR_H : 0);
+
+		cell = nc;
+		[window setContentResizeIncrements:cell];
+		content.origin.y += content.size.height - h;	/* keep the top */
+		content.size = NSMakeSize(c * nc.width, h);
+		[window setFrame:[window frameRectForContentRect:content] display:YES];
+	}
+}
 - (NSArray *)views	{ return views; }
 - (int)activeIndex	{ return active; }
 
@@ -242,6 +329,7 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 	if (i == (int)NSNotFound)
 		return;
 	[[NSNotificationCenter defaultCenter] removeObserver:self name:nil object:v];
+	[v shutdown];
 	[v removeFromSuperview];
 	[views removeObjectAtIndex:i];		/* releases it: SIGHUP to its shell */
 	if ([views count] == 0) {
@@ -299,7 +387,15 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 
 - (void)windowWillClose:(NSNotification *)n
 {
+	CGSConnectionID cid = _CGSDefaultConnection();
+
 	(void)n;
+	[views makeObjectsPerformSelector:@selector(shutdown)];
+	if (blurFilter) {
+		CGSRemoveWindowFilter(cid, (int)[window windowNumber], blurFilter);
+		CGSReleaseCIFilter(cid, blurFilter);
+		blurFilter = NULL;
+	}
 	[[NSNotificationCenter defaultCenter] removeObserver:self];
 	[[NSNotificationCenter defaultCenter]
 		postNotificationName:TermWindowClosedNotification object:self];

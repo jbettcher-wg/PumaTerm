@@ -25,8 +25,8 @@
 #include "vterm.h"
 #include "GlyphAtlas.h"
 #include "Pty.h"
+#import "Prefs.h"
 
-#define SCROLLBACK	10000
 
 /* Test hook: SIGUSR1 asks the next frame to be written to /tmp/pumaterm-frame.png,
  * so rendering can be checked over ssh without disturbing the desktop. */
@@ -40,6 +40,29 @@ NSString *const TermTitleChangedNotification = @"TermTitleChanged";
 
 static volatile sig_atomic_t dump_requested;
 static void on_usr1(int sig) { (void)sig; dump_requested = 1; }
+
+/* The window as the window server composites it, alpha included, which is
+ * what shows whether a translucent background really is. */
+static void dump_window(CGWindowID wid)
+{
+	CGImageRef img = CGWindowListCreateImage(CGRectNull, kCGWindowListOptionIncludingWindow,
+						 wid, kCGWindowImageBoundsIgnoreFraming);
+	CFURLRef url;
+	CGImageDestinationRef d;
+
+	if (img == NULL)
+		return;
+	url = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/pumaterm-window.png"),
+					    kCFURLPOSIXPathStyle, false);
+	d = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+	if (d) {
+		CGImageDestinationAddImage(d, img, NULL);
+		CGImageDestinationFinalize(d);
+		CFRelease(d);
+	}
+	CFRelease(url);
+	CGImageRelease(img);
+}
 
 static void dump_frame(int w, int h)
 {
@@ -135,8 +158,7 @@ static int cb_settermprop(VTermProp prop, VTermValue *val, void *user)
 
 static int cb_bell(void *user)
 {
-	(void)user;
-	NSBeep();
+	[(TermView *)user ringBell];
 	return 1;
 }
 
@@ -177,7 +199,11 @@ static const char *fsrc =
 	"#version 120\n"
 	"uniform sampler2D tex;\n"
 	"varying vec2 vuv; varying vec4 vfg; varying vec4 vbg;\n"
-	"void main() { float a = texture2D(tex, vuv).a; gl_FragColor = mix(vbg, vfg, a); }\n";
+	"void main() {\n"
+	"  float a = texture2D(tex, vuv).a;\n"
+	"  float al = mix(vbg.a, vfg.a, a);\n"
+	"  gl_FragColor = vec4(mix(vbg.rgb, vfg.rgb, a) * al, al);\n"
+	"}\n";
 
 static GLuint compile(GLenum type, const char *src)
 {
@@ -230,21 +256,133 @@ static GLuint compile(GLenum type, const char *src)
 	vterm_screen_set_callbacks(screen, &screen_cbs, self);
 	vterm_screen_set_damage_merge(screen, VTERM_DAMAGE_SCROLL);
 	vterm_screen_enable_altscreen(screen, 1);
-	{
-		VTermColor fg, bg;
-		vterm_color_rgb(&fg, 0xD8, 0xD8, 0xD8);
-		vterm_color_rgb(&bg, 0x12, 0x12, 0x14);
-		vterm_state_set_default_colors(vterm_obtain_state(vt), &fg, &bg);
-	}
 	vterm_screen_reset(screen, 1);
 
-	sb = calloc(SCROLLBACK, sizeof *sb);
+	/* Scrollback is sized once, at creation: a new value applies to new
+	 * tabs. */
+	sbSize = (int)[[NSUserDefaults standardUserDefaults] integerForKey:kPrefScrollback];
+	if (sbSize < 100) sbSize = 100;
+	if (sbSize > 200000) sbSize = 200000;
+	sb = calloc(sbSize, sizeof *sb);
+	blinkOn = YES;
+	[self applyPrefs];
 	return self;
 }
 
 - (NSSize)cellSize
 {
 	return NSMakeSize(cellW, cellH);
+}
+
+- (int)columns	{ return cols; }
+- (int)rows	{ return rows; }
+
+static void vcolor(VTermColor *v, const unsigned char c[3])
+{
+	vterm_color_rgb(v, c[0], c[1], c[2]);
+}
+
+/* Re-read the settings this view draws with. A font change rebuilds the
+ * glyph atlas and changes the cell size; the window controller then
+ * resizes the window to keep the rows and columns. */
+- (void)applyPrefs
+{
+	NSUserDefaults *u = [NSUserDefaults standardUserDefaults];
+	VTermState *st = vterm_obtain_state(vt);
+	VTermColor fg, bg;
+	unsigned char c[3];
+	float size;
+	NSString *font = prefs_font(&size);
+	int i;
+
+	prefs_rgb(kPrefForeground, c);
+	vcolor(&fg, c);
+	prefs_rgb(kPrefBackground, c);
+	vcolor(&bg, c);
+	vterm_state_set_default_colors(st, &fg, &bg);
+	for (i = 0; i < 16; i++) {
+		VTermColor p;
+		prefs_palette_rgb(i, c);
+		vcolor(&p, c);
+		vterm_state_set_palette_color(st, i, &p);
+	}
+	prefs_rgb(kPrefCursorColor, cursorRGB);
+	prefs_rgb(kPrefSelection, selRGB);
+
+	bgAlpha = [u floatForKey:kPrefOpacity];
+	if (bgAlpha < 0.2f) bgAlpha = 0.2f;
+	if (bgAlpha > 1) bgAlpha = 1;
+	{
+		/* The surface composites by its alpha only when it is marked
+		 * non-opaque; an opaque one ignores alpha altogether. */
+		GLint opaque = bgAlpha >= 1;
+		[[self openGLContext] setValues:&opaque forParameter:NSOpenGLCPSurfaceOpacity];
+	}
+	cursorShape = [u integerForKey:kPrefCursorShape];
+	cursorBlink = [u boolForKey:kPrefCursorBlink];
+	bellMode = [u integerForKey:kPrefBell];
+	optionMeta = [u boolForKey:kPrefOptionMeta];
+
+	[blinkTimer invalidate];
+	blinkTimer = nil;
+	blinkOn = YES;
+	if (cursorBlink)
+		blinkTimer = [NSTimer scheduledTimerWithTimeInterval:0.53 target:self
+			selector:@selector(blink:) userInfo:nil repeats:YES];
+
+	if (![font isEqualToString:fontName] || size != fontSize) {
+		[fontName release];
+		fontName = [font retain];
+		fontSize = size;
+		[[self openGLContext] makeCurrentContext];
+		atlas_destroy(atlas);
+		atlas = atlas_create([font UTF8String], size);
+		atlas_metrics(atlas, &cellW, &cellH);
+		[self reshape];
+	}
+	/* Damage everything: cells hold palette indexes and default flags,
+	 * so recolouring needs no change to the screen itself. */
+	[self setNeedsDisplay:YES];
+}
+
+- (void)blink:(NSTimer *)t
+{
+	(void)t;
+	blinkOn = !blinkOn;
+	[self setNeedsDisplay:YES];
+}
+
+- (void)endFlash:(id)o
+{
+	(void)o;
+	flashing = NO;
+	[self setNeedsDisplay:YES];
+}
+
+- (void)ringBell
+{
+	if (bellMode == BellAudible)
+		NSBeep();
+	else if (bellMode == BellVisual && !flashing) {
+		flashing = YES;
+		[self setNeedsDisplay:YES];
+		[self performSelector:@selector(endFlash:) withObject:nil afterDelay:0.12];
+	}
+}
+
+/* Timers retain their target, so a closed tab must stop them itself or
+ * it is never freed and its shell never hung up. */
+- (void)shutdown
+{
+	[blinkTimer invalidate];
+	blinkTimer = nil;
+	[dumpTimer invalidate];
+	dumpTimer = nil;
+	[NSObject cancelPreviousPerformRequestsWithTarget:self];
+	if (child > 0) {
+		kill(child, SIGHUP);
+		child = 0;
+	}
 }
 
 - (BOOL)acceptsFirstResponder	{ return YES; }
@@ -266,7 +404,10 @@ static GLuint compile(GLenum type, const char *src)
 
 - (void)startShell
 {
-	masterFd = pty_spawn(rows, cols, &child);
+	NSUserDefaults *u = [NSUserDefaults standardUserDefaults];
+	NSString *cmd = [u integerForKey:kPrefShellMode] == 1 ? [u stringForKey:kPrefShellCommand] : nil;
+
+	masterFd = pty_spawn(rows, cols, [cmd length] ? [cmd UTF8String] : NULL, &child);
 	if (masterFd < 0) {
 		NSLog(@"pumaterm: forkpty failed");
 		[NSApp terminate:nil];
@@ -278,7 +419,7 @@ static GLuint compile(GLenum type, const char *src)
 	[ptyHandle readInBackgroundAndNotify];
 
 	signal(SIGUSR1, on_usr1);
-	[NSTimer scheduledTimerWithTimeInterval:0.25 target:self
+	dumpTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self
 		selector:@selector(pollDump:) userInfo:nil repeats:YES];
 	{
 		/* Test hook: PUMATERM_STARTUP_INPUT is typed into the shell once it is up. */
@@ -362,8 +503,8 @@ static GLuint compile(GLenum type, const char *src)
 	l->cells = malloc(sizeof(VTermScreenCell) * n);
 	memcpy(l->cells, cells, sizeof(VTermScreenCell) * n);
 	l->cols = n;
-	sbHead = (sbHead + 1) % SCROLLBACK;
-	if (sbCount < SCROLLBACK)
+	sbHead = (sbHead + 1) % sbSize;
+	if (sbCount < sbSize)
 		sbCount++;
 	[self shiftSelection:-1];
 	return 1;
@@ -376,7 +517,7 @@ static GLuint compile(GLenum type, const char *src)
 
 	if (sbCount == 0)
 		return 0;
-	sbHead = (sbHead + SCROLLBACK - 1) % SCROLLBACK;
+	sbHead = (sbHead + sbSize - 1) % sbSize;
 	sbCount--;
 	l = &sb[sbHead];
 	for (i = 0; i < n; i++) {
@@ -403,7 +544,7 @@ static GLuint compile(GLenum type, const char *src)
 	int back = scrollOffset - r;		/* > 0: this row is history */
 
 	if (back > 0) {
-		SBLine *l = &sb[(sbHead - back + SCROLLBACK) % SCROLLBACK];
+		SBLine *l = &sb[(sbHead - back + sbSize) % sbSize];
 		if (c >= l->cols)
 			return 0;
 		*cellOut = l->cells[c];
@@ -449,6 +590,18 @@ static GLuint compile(GLenum type, const char *src)
 	glDisable(GL_BLEND);
 }
 
+static void add_rect(float *lv, GLubyte *lc, int *nl, float x0, float y0,
+		     float x1, float y1, const GLubyte col[4])
+{
+	float q[16] = { x0, y0, 0, 0,  x1, y0, 0, 0,  x1, y1, 0, 0,  x0, y1, 0, 0 };
+	int k;
+
+	memcpy(lv + *nl * 4, q, sizeof q);
+	for (k = 0; k < 4; k++)
+		memcpy(lc + (*nl + k) * 4, col, 4);
+	*nl += 4;
+}
+
 static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 {
 	vterm_screen_convert_color_to_rgb(s, &c);
@@ -463,12 +616,16 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	NSRect b = [self bounds];
 	/* Per cell: its quad plus up to three line quads (double underline
 	 * and strikethrough). */
-	int r, c, n = 0, need = rows * cols * 4 * 4;
-	int nl = 0, lineCap = rows * cols * 3 * 4, thick = cellH >= 28 ? 2 : 1;
+	int r, c, n = 0, need = rows * cols * 4 * 4 + 32;
+	int nl = 0, lineCap = rows * cols * 3 * 4 + 16, thick = cellH >= 28 ? 2 : 1;
+	int focused = [[self window] isKeyWindow];
+	GLubyte bgA = (GLubyte)lroundf(bgAlpha * 255), curc[4], selc[4];
+	float cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
+	int cursorAt = 0;
 	float *lv;
 	GLubyte *lc;
 	float proj[16] = { 0 };
-	GLubyte defbg[4];
+	GLubyte defbg[4], deffg[4];
 
 	(void)dirty;
 	[[self openGLContext] makeCurrentContext];
@@ -486,7 +643,11 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 		VTermColor fg, bg;
 		vterm_state_get_default_colors(vterm_obtain_state(vt), &fg, &bg);
 		rgb_of(screen, bg, defbg);
+		rgb_of(screen, fg, deffg);
+		defbg[3] = bgA;
 	}
+	memcpy(curc, cursorRGB, 3); curc[3] = 255;
+	memcpy(selc, selRGB, 3); selc[3] = 255;
 
 	for (r = 0; r < rows; r++) {
 		for (c = 0; c < cols; c++) {
@@ -503,20 +664,34 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 			} else {
 				rgb_of(screen, cell.fg, fg);
 				rgb_of(screen, cell.bg, bg);
+				/* A cell in the default colours stores whatever the
+				 * default was when it was written; draw today's, so a
+				 * new scheme recolours what is already on screen.
+				 * Only the default background is translucent: a
+				 * program's coloured cells stay solid, as in iTerm. */
+				if (VTERM_COLOR_IS_DEFAULT_FG(&cell.fg))
+					memcpy(fg, deffg, 4);
+				if (VTERM_COLOR_IS_DEFAULT_BG(&cell.bg))
+					memcpy(bg, defbg, 4);
 				if (cell.width == 2)
 					wide = 2;
 			}
 			if (cell.width == 0 && c > 0)	/* right half of a wide glyph */
 				continue;
-			if (cell.attrs.reverse) {
+			if (cell.attrs.reverse != flashing) {
 				GLubyte t[4];
 				memcpy(t, fg, 4); memcpy(fg, bg, 4); memcpy(bg, t, 4);
+				fg[3] = bg[3] = 255;
 			}
+			if ([self isSelectedLine:r - scrollOffset col:c])
+				memcpy(bg, selc, 4);
 			isCursor = cursorVisible && scrollOffset == 0 &&
-				   r == cursor.row && c == cursor.col && [[self window] isKeyWindow];
-			if (isCursor != [self isSelectedLine:r - scrollOffset col:c]) {
-				GLubyte t[4];
-				memcpy(t, fg, 4); memcpy(fg, bg, 4); memcpy(bg, t, 4);
+				   r == cursor.row && c == cursor.col &&
+				   (blinkOn || !cursorBlink || !focused);
+			if (isCursor && focused && cursorShape == CursorBlock) {
+				memcpy(bg, curc, 4);
+				memcpy(fg, defbg, 3);
+				fg[3] = 255;
 			}
 			atlas_lookup(atlas, cell.attrs.conceal ? ' ' : cell.chars[0],
 				     (cell.attrs.bold ? ATLAS_BOLD : 0) |
@@ -526,6 +701,10 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 			x1 = x0 + wide * cellW;
 			y0 = r * cellH;
 			y1 = y0 + cellH;
+			if (isCursor) {
+				cursorAt = 1;
+				cx0 = x0; cy0 = y0; cx1 = x1; cy1 = y1;
+			}
 			{
 				float q[16] = { x0, y0, uv[0], uv[1],  x1, y0, uv[2], uv[1],
 						x1, y1, uv[2], uv[3],  x0, y1, uv[0], uv[3] };
@@ -564,6 +743,23 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 		}
 	}
 
+	/* Cursors other than the focused block are drawn over the cell: an
+	 * underline, a bar, or an outline for a window that is not key, as
+	 * Terminal.app does. */
+	if (cursorAt && !(focused && cursorShape == CursorBlock)) {
+		float w = cellW >= 10 ? 2 : 1;
+		if (cursorShape == CursorUnderline)
+			add_rect(lv, lc, &nl, cx0, cy1 - 2 * w, cx1, cy1, curc);
+		else if (cursorShape == CursorBar)
+			add_rect(lv, lc, &nl, cx0, cy0, cx0 + w, cy1, curc);
+		else {
+			add_rect(lv, lc, &nl, cx0, cy0, cx1, cy0 + 1, curc);
+			add_rect(lv, lc, &nl, cx0, cy1 - 1, cx1, cy1, curc);
+			add_rect(lv, lc, &nl, cx0, cy0, cx0 + 1, cy1, curc);
+			add_rect(lv, lc, &nl, cx1 - 1, cy0, cx1, cy1, curc);
+		}
+	}
+
 	/* A quad whose two colours are equal draws that colour whatever the
 	 * atlas holds, so the lines need no texture of their own. */
 	memmove(verts + n * 4, lv, sizeof(float) * 4 * nl);
@@ -572,7 +768,8 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	n += nl;
 
 	glViewport(0, 0, (GLsizei)b.size.width, (GLsizei)b.size.height);
-	glClearColor(defbg[0] / 255.0f, defbg[1] / 255.0f, defbg[2] / 255.0f, 1);
+	glClearColor(defbg[0] / 255.0f * bgAlpha, defbg[1] / 255.0f * bgAlpha,
+		     defbg[2] / 255.0f * bgAlpha, bgAlpha);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	/* Pixels, y down: (0,0) is the top left of the view. */
@@ -606,6 +803,7 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	if (dump_requested) {
 		dump_requested = 0;
 		dump_frame((int)b.size.width, (int)b.size.height);
+		dump_window((CGWindowID)[[self window] windowNumber]);
 		printf("dumped: %s\n", [[self title] UTF8String]);
 		fflush(stdout);
 	}
@@ -635,21 +833,22 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 
 /* ---- input ----------------------------------------------------------- */
 
-static VTermModifier mods_of(NSEvent *e)
+static VTermModifier mods_of(NSEvent *e, BOOL optionMeta)
 {
 	NSUInteger f = [e modifierFlags];
 	int m = VTERM_MOD_NONE;
 
 	if (f & NSShiftKeyMask)		m |= VTERM_MOD_SHIFT;
 	if (f & NSControlKeyMask)	m |= VTERM_MOD_CTRL;
-	if (f & NSAlternateKeyMask)	m |= VTERM_MOD_ALT;	/* Option is Meta */
+	if (optionMeta && (f & NSAlternateKeyMask))
+		m |= VTERM_MOD_ALT;	/* else Option composes characters */
 	return (VTermModifier)m;
 }
 
 - (void)keyDown:(NSEvent *)e
 {
 	NSString *s = [e charactersIgnoringModifiers];
-	VTermModifier mod = mods_of(e);
+	VTermModifier mod = mods_of(e, optionMeta);
 	unichar ch;
 	VTermKey key = VTERM_KEY_NONE;
 
@@ -687,6 +886,7 @@ static VTermModifier mods_of(NSEvent *e)
 	}
 
 	scrollOffset = 0;
+	blinkOn = YES;			/* the cursor shows while typing */
 	if (selActive) {		/* typing drops the selection */
 		selActive = NO;
 		[self setNeedsDisplay:YES];
@@ -752,8 +952,8 @@ static VTermModifier mods_of(NSEvent *e)
 	if (mouseMode != VTERM_PROP_MOUSE_NONE) {
 		NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
 		int row = (int)(([self bounds].size.height - p.y) / cellH), col = (int)(p.x / cellW);
-		vterm_mouse_move(vt, row, col, mods_of(e));
-		vterm_mouse_button(vt, dy > 0 ? 4 : 5, true, mods_of(e));
+		vterm_mouse_move(vt, row, col, mods_of(e, optionMeta));
+		vterm_mouse_button(vt, dy > 0 ? 4 : 5, true, mods_of(e, optionMeta));
 		return;
 	}
 	scrollOffset += (int)(dy > 0 ? ceilf(dy) : floorf(dy)) * 3;
@@ -769,9 +969,9 @@ static VTermModifier mods_of(NSEvent *e)
 
 	if (mouseMode == VTERM_PROP_MOUSE_NONE)
 		return;
-	vterm_mouse_move(vt, row, col, mods_of(e));
+	vterm_mouse_move(vt, row, col, mods_of(e, optionMeta));
 	if (button)
-		vterm_mouse_button(vt, button, pressed, mods_of(e));
+		vterm_mouse_button(vt, button, pressed, mods_of(e, optionMeta));
 }
 
 /* The mouse belongs to the program when it asked for reports; Shift takes
@@ -974,7 +1174,7 @@ static void put_utf8(NSMutableData *d, uint32_t ch)
 	[ptyHandle release];
 	vterm_free(vt);
 	atlas_destroy(atlas);
-	for (i = 0; i < SCROLLBACK; i++)
+	for (i = 0; i < sbSize; i++)
 		free(sb[i].cells);
 	free(sb);
 	free(verts);

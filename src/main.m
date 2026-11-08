@@ -8,6 +8,8 @@
 #import <Cocoa/Cocoa.h>
 #import "TermView.h"
 #import "TermWindow.h"
+#import "PrefsWindow.h"
+#import "Prefs.h"
 #include <stdlib.h>
 
 @interface TermApp : NSObject {
@@ -36,38 +38,47 @@
 		name:TermWindowClosedNotification object:nil];
 	for (i = 0; i < (count > 0 ? count : 1); i++)
 		[self newWindow:nil];
+	if (getenv("PUMATERM_TEST_PREFS"))		/* test hook */
+		[[PrefsWindow shared] showForTest];
+	if (getenv("PUMATERM_TEST_LIVE"))		/* test hook */
+		[self performSelector:@selector(liveChange:) withObject:nil afterDelay:3.0];
 }
 
-/* The Font default if set, else Hack Nerd Font Mono where it is installed
- * (its icons are what prompts and status bars draw now), else Monaco. A
- * name Core Text does not know falls back silently to a proportional
- * face, so it is checked here rather than trusted. */
-static NSString *chosen_font(float size)
+/* Test hook: change scheme and font size while running, as the
+ * Preferences window would, but in the argument domain, which is never
+ * written to disk, so the user's settings are untouched. */
+- (void)liveChange:(id)o
 {
-	NSString *f = [[NSUserDefaults standardUserDefaults] stringForKey:@"Font"];
+	NSMutableDictionary *d = [NSMutableDictionary dictionaryWithDictionary:
+		prefs_scheme_values([NSString stringWithUTF8String:getenv("PUMATERM_TEST_LIVE")])];
 
-	if (f != nil && [NSFont fontWithName:f size:size] != nil)
-		return f;
-	if ([NSFont fontWithName:@"HackNFM-Regular" size:size] != nil)
-		return @"HackNFM-Regular";
-	return @"Monaco";
+	(void)o;
+	[d setObject:[NSNumber numberWithFloat:16] forKey:kPrefFontSize];
+	[d addEntriesFromDictionary:[[NSUserDefaults standardUserDefaults]
+		volatileDomainForName:NSArgumentDomain]];
+	[d setObject:[NSNumber numberWithFloat:16] forKey:kPrefFontSize];
+	[[NSUserDefaults standardUserDefaults] setVolatileDomain:d forName:NSArgumentDomain];
+	prefs_changed();
 }
 
 - (void)newWindow:(id)sender
 {
-	float size = [[NSUserDefaults standardUserDefaults] floatForKey:@"FontSize"];
 	TermWindow *tw;
 
 	(void)sender;
-	if (size <= 0)
-		size = 12;
-	tw = [[TermWindow alloc] initWithFont:chosen_font(size) size:size cascadeFrom:&cascade];
+	tw = [[TermWindow alloc] initWithCascadeFrom:&cascade];
 	[windows addObject:tw];
 	[tw release];
 	if (getenv("PUMATERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
 		[[tw window] orderBack:nil];
 	else
 		[[tw window] makeKeyAndOrderFront:nil];
+}
+
+- (void)showPreferences:(id)sender
+{
+	(void)sender;
+	[[PrefsWindow shared] show];
 }
 
 - (void)windowClosed:(NSNotification *)n
@@ -86,6 +97,8 @@ static NSMenu *build_menu(void)
 	NSMenu *win = [[[NSMenu alloc] initWithTitle:@"Window"] autorelease];
 	NSMenuItem *i;
 
+	[app addItemWithTitle:[NSString stringWithFormat:@"Preferences%C", (unichar)0x2026] action:@selector(showPreferences:) keyEquivalent:@","];
+	[app addItem:[NSMenuItem separatorItem]];
 	[app addItemWithTitle:@"Hide PumaTerm" action:@selector(hide:) keyEquivalent:@"h"];
 	[app addItem:[NSMenuItem separatorItem]];
 	[app addItemWithTitle:@"Quit PumaTerm" action:@selector(terminate:) keyEquivalent:@"q"];
@@ -120,6 +133,7 @@ int main(int argc, char **argv)
 
 	(void)argc;
 	(void)argv;
+	prefs_register();
 	[app setMainMenu:build_menu()];
 	/* -[NSApplication setAppleMenu:] is private on 10.5; the first item of
 	 * the main menu is the application menu either way. */
