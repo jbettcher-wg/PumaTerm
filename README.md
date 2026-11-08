@@ -135,3 +135,9 @@ threads, truecolor theme, braille meters and box-drawn frames.
 Combining characters drawn over their base, colour emoji, Intel builds
 (the code has nothing PowerPC-specific, but only `-arch ppc` has been
 built and run).
+
+## Licence
+
+MIT, see `LICENSE`. `vendor/libvterm` is libvterm 0.3.3 by Paul Evans,
+also MIT, under its own `vendor/libvterm/LICENSE`. The icon is original
+artwork for this project and is covered by the same licence.
