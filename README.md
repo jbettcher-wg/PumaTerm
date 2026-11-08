@@ -1,6 +1,6 @@
-# term -- a GL-accelerated terminal for Mac OS X 10.5 PowerPC
+# PumaTerm -- a GL-accelerated terminal for Mac OS X 10.5 PowerPC
 
-(Working name; renaming is a find-and-replace on `term`/`Term`.)
+Named for Mac OS X 10.1's codename, one cat before the Leopard it runs on.
 
 Every frame is one draw call: a vertex array with a quad per cell, carrying
 the glyph's atlas coordinates and its foreground and background colours, and
@@ -20,8 +20,8 @@ driver underneath can do; on board 1 it runs on the RadeonNI renderer
 
 Build natively on a board (Apple's gcc-4.2: Objective-C and the 10.5 SDK):
 
-    make            # -> build/Term.app
-    cp -R build/Term.app /Applications/
+    make            # -> build/PumaTerm.app
+    make install    # -> /Applications/PumaTerm.app
 
 Cmd-N opens another window, Cmd-T another tab (each tab its own shell and
 pty); Cmd-W closes a tab, Shift-Cmd-W the window, Shift-Cmd-[ and ] move
@@ -29,8 +29,8 @@ between tabs, and a tab is labelled with the title its program sets (OSC 0/2).
 The tab strip appears with the second tab, and the window grows by its
 height so the terminal keeps its rows.
 
-Defaults: `defaults write org.xnu-t4240.term Font Monaco`, `FontSize 12`.
-With no `Font` set, or one that is not installed, Term takes Hack Nerd Font
+Defaults: `defaults write org.xnu-t4240.pumaterm Font Monaco`, `FontSize 12`.
+With no `Font` set, or one that is not installed, PumaTerm takes Hack Nerd Font
 Mono if it is in a Fonts folder and Monaco if not.
 `Font` is the **PostScript** name, not the file or family name: an unknown
 name silently falls back to a proportional system face (which shows as wide
@@ -51,14 +51,14 @@ a program has the mouse (btop, vim with mouse=a). Cmd-C copies, with lines
 the terminal wrapped joined back into one.
 
 Test hooks (for checking rendering over ssh without touching the desktop):
-`TERM_STARTUP_INPUT='btop\n'` types into the shell after start and opens the
+`PUMATERM_STARTUP_INPUT='btop\n'` types into the shell after start and opens the
 window behind the others; `kill -USR1 <pid>` writes the next frame to
-`/tmp/term-frame.png`; `TERM_TEST_SELECT="line col line col unit"` (unit 1
+`/tmp/pumaterm-frame.png`; `PUMATERM_TEST_SELECT="line col line col unit"` (unit 1
 cell, 2 word, 3 line) makes that selection at the dump and prints what Copy
 would take to stdout, so the clipboard is never touched.
-`TERM_TEST_WINDOWS=n` opens n windows at launch, and `TERM_TEST_TABS=n` n tabs
-in each, writing the tab strip to `/tmp/term-tabs.png`.
-`proving-ground/board/termtest.sh` drives them all, and passes `TERM_ARGS`
+`PUMATERM_TEST_WINDOWS=n` opens n windows at launch, and `PUMATERM_TEST_TABS=n` n tabs
+in each, writing the tab strip to `/tmp/pumaterm-tabs.png`.
+`proving-ground/board/pumatermtest.sh` drives them all, and passes `PUMATERM_ARGS`
 (e.g. `-Font HackNFM-Regular`) through.
 
 Measured on board 1, 2026-11-08: btop 1.4.8 draws all panels, 24 CPU

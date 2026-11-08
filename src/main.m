@@ -27,7 +27,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)n
 {
-	const char *nw = getenv("TERM_TEST_WINDOWS");	/* test hook */
+	const char *nw = getenv("PUMATERM_TEST_WINDOWS");	/* test hook */
 	int i, count = nw ? atoi(nw) : 1;
 
 	(void)n;
@@ -64,7 +64,7 @@ static NSString *chosen_font(float size)
 	tw = [[TermWindow alloc] initWithFont:chosen_font(size) size:size cascadeFrom:&cascade];
 	[windows addObject:tw];
 	[tw release];
-	if (getenv("TERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
+	if (getenv("PUMATERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
 		[[tw window] orderBack:nil];
 	else
 		[[tw window] makeKeyAndOrderFront:nil];
@@ -80,15 +80,15 @@ static NSString *chosen_font(float size)
 static NSMenu *build_menu(void)
 {
 	NSMenu *bar = [[[NSMenu alloc] initWithTitle:@""] autorelease];
-	NSMenu *app = [[[NSMenu alloc] initWithTitle:@"term"] autorelease];
+	NSMenu *app = [[[NSMenu alloc] initWithTitle:@"PumaTerm"] autorelease];
 	NSMenu *shell = [[[NSMenu alloc] initWithTitle:@"Shell"] autorelease];
 	NSMenu *edit = [[[NSMenu alloc] initWithTitle:@"Edit"] autorelease];
 	NSMenu *win = [[[NSMenu alloc] initWithTitle:@"Window"] autorelease];
 	NSMenuItem *i;
 
-	[app addItemWithTitle:@"Hide term" action:@selector(hide:) keyEquivalent:@"h"];
+	[app addItemWithTitle:@"Hide PumaTerm" action:@selector(hide:) keyEquivalent:@"h"];
 	[app addItem:[NSMenuItem separatorItem]];
-	[app addItemWithTitle:@"Quit term" action:@selector(terminate:) keyEquivalent:@"q"];
+	[app addItemWithTitle:@"Quit PumaTerm" action:@selector(terminate:) keyEquivalent:@"q"];
 	[shell addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@"n"];
 	[shell addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@"t"];
 	[shell addItem:[NSMenuItem separatorItem]];
@@ -101,7 +101,7 @@ static NSMenu *build_menu(void)
 	[win addItemWithTitle:@"Select Next Tab" action:@selector(selectNextTab:) keyEquivalent:@"}"];
 	[win addItemWithTitle:@"Select Previous Tab" action:@selector(selectPreviousTab:) keyEquivalent:@"{"];
 
-	i = [bar addItemWithTitle:@"term" action:NULL keyEquivalent:@""];
+	i = [bar addItemWithTitle:@"PumaTerm" action:NULL keyEquivalent:@""];
 	[bar setSubmenu:app forItem:i];
 	i = [bar addItemWithTitle:@"Shell" action:NULL keyEquivalent:@""];
 	[bar setSubmenu:shell forItem:i];

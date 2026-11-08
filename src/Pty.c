@@ -49,7 +49,7 @@ int pty_spawn(int rows, int cols, pid_t *pid)
 
 		setenv("TERM", "xterm-256color", 1);
 		setenv("COLORTERM", "truecolor", 1);
-		setenv("TERM_PROGRAM", "term", 1);
+		setenv("TERM_PROGRAM", "PumaTerm", 1);
 		if (getenv("LANG") == NULL && getenv("LC_ALL") == NULL)
 			setenv("LANG", "en_US.UTF-8", 1);
 

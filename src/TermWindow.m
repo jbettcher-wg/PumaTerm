@@ -138,9 +138,9 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 		name:NSViewFrameDidChangeNotification object:container];
 	[self newTab:nil];
 	{
-		/* Test hook: TERM_TEST_TABS=n opens n tabs and, a few seconds
-		 * on, writes the strip to /tmp/term-tabs.png. */
-		const char *nt = getenv("TERM_TEST_TABS");
+		/* Test hook: PUMATERM_TEST_TABS=n opens n tabs and, a few seconds
+		 * on, writes the strip to /tmp/pumaterm-tabs.png. */
+		const char *nt = getenv("PUMATERM_TEST_TABS");
 		int i;
 		for (i = 1; nt && i < atoi(nt); i++)
 			[self newTab:nil];
@@ -156,7 +156,7 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 
 	[bar cacheDisplayInRect:[bar bounds] toBitmapImageRep:rep];
 	[[rep representationUsingType:NSPNGFileType properties:nil]
-		writeToFile:@"/tmp/term-tabs.png" atomically:NO];
+		writeToFile:@"/tmp/pumaterm-tabs.png" atomically:NO];
 }
 
 - (NSWindow *)window	{ return window; }

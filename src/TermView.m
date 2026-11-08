@@ -28,7 +28,7 @@
 
 #define SCROLLBACK	10000
 
-/* Test hook: SIGUSR1 asks the next frame to be written to /tmp/term-frame.png,
+/* Test hook: SIGUSR1 asks the next frame to be written to /tmp/pumaterm-frame.png,
  * so rendering can be checked over ssh without disturbing the desktop. */
 static int pos_cmp(VTermPos a, VTermPos b)
 {
@@ -57,7 +57,7 @@ static void dump_frame(int w, int h)
 		memcpy(flip + (size_t)y * stride, px + (size_t)(h - 1 - y) * stride, stride);
 	bc = CGBitmapContextCreate(flip, w, h, 8, stride, cs, kCGImageAlphaNoneSkipLast);
 	img = CGBitmapContextCreateImage(bc);
-	url = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/term-frame.png"), kCFURLPOSIXPathStyle, false);
+	url = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/pumaterm-frame.png"), kCFURLPOSIXPathStyle, false);
 	dst = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
 	if (dst) {
 		CGImageDestinationAddImage(dst, img, NULL);
@@ -190,7 +190,7 @@ static GLuint compile(GLenum type, const char *src)
 	glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
 	if (!ok) {
 		glGetShaderInfoLog(s, sizeof log, NULL, log);
-		NSLog(@"term: shader: %s", log);
+		NSLog(@"pumaterm: shader: %s", log);
 	}
 	return s;
 }
@@ -254,7 +254,7 @@ static GLuint compile(GLenum type, const char *src)
 - (void)setCursorPos:(NSValue *)v	{ [v getValue:&cursor]; }
 - (void)setCursorShown:(NSNumber *)n	{ cursorVisible = [n boolValue]; }
 - (void)setMouseReporting:(NSNumber *)n	{ mouseMode = [n intValue]; }
-- (NSString *)title			{ return title ? title : @"term"; }
+- (NSString *)title			{ return title ? title : @"PumaTerm"; }
 
 - (void)setTitle:(NSString *)t
 {
@@ -268,7 +268,7 @@ static GLuint compile(GLenum type, const char *src)
 {
 	masterFd = pty_spawn(rows, cols, &child);
 	if (masterFd < 0) {
-		NSLog(@"term: forkpty failed");
+		NSLog(@"pumaterm: forkpty failed");
 		[NSApp terminate:nil];
 		return;
 	}
@@ -281,8 +281,8 @@ static GLuint compile(GLenum type, const char *src)
 	[NSTimer scheduledTimerWithTimeInterval:0.25 target:self
 		selector:@selector(pollDump:) userInfo:nil repeats:YES];
 	{
-		/* Test hook: TERM_STARTUP_INPUT is typed into the shell once it is up. */
-		const char *in = getenv("TERM_STARTUP_INPUT");
+		/* Test hook: PUMATERM_STARTUP_INPUT is typed into the shell once it is up. */
+		const char *in = getenv("PUMATERM_STARTUP_INPUT");
 		if (in && *in)
 			[self performSelector:@selector(typeStartup:)
 				   withObject:[NSString stringWithUTF8String:in] afterDelay:1.5];
@@ -293,10 +293,10 @@ static GLuint compile(GLenum type, const char *src)
 {
 	(void)t;
 	if (dump_requested) {
-		/* Test hook: TERM_TEST_SELECT="line col line col unit" makes the
+		/* Test hook: PUMATERM_TEST_SELECT="line col line col unit" makes the
 		 * selection a click at the first cell and a drag to the second
 		 * would, and prints what Copy would take, before the frame dump. */
-		const char *sel = getenv("TERM_TEST_SELECT");
+		const char *sel = getenv("PUMATERM_TEST_SELECT");
 		VTermPos a, b, p, q;
 		static int selTested;
 
