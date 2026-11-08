@@ -1,0 +1,4 @@
+libvterm 0.3.3, https://www.leonerd.org.uk/code/libvterm/libvterm-0.3.3.tar.gz
+sha256 09156f43dd2128bd347cbeebe50d9a571d32c64e0cf18d211197946aff7226e0
+MIT (LICENSE). src/ and include/ only, unmodified; the generated encoding
+tables ship in the tarball, so no build scripts are run.
