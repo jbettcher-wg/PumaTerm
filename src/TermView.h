@@ -32,6 +32,9 @@ typedef struct {
 	uint32_t	*cpuPix;		/* the CPU path's frame */
 	int		 cpuW, cpuH;
 	CGContextRef	 cpuCtx;
+	int		 lastW, lastH;
+	int		 dirtyR0, dirtyR1;	/* changed live rows; none if R1 < R0 */
+	BOOL		 dirtyAll;
 	VTerm		*vt;
 	VTermScreen	*screen;
 	GlyphAtlas	*atlas;
@@ -85,6 +88,7 @@ typedef struct {
 - (void)glPrepare;		/* for TermGLView */
 - (void)glDraw;
 - (void)resizeTerminal;
+- (void)damageRows:(int)a to:(int)b;
 - (NSString *)selectionText;
 - (void)copy:(id)sender;
 @end

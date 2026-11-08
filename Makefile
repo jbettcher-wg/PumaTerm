@@ -15,7 +15,7 @@ OBJ := $(patsubst %.c,build/obj/%.o,$(VTERM_SRC)) \
 FRAMEWORKS := -framework Cocoa -framework OpenGL -framework ApplicationServices
 APP := build/PumaTerm.app
 
-all: $(APP)/Contents/MacOS/pumaterm $(APP)/Contents/Info.plist
+all: $(APP)/Contents/MacOS/pumaterm $(APP)/Contents/Info.plist $(APP)/Contents/Resources/PumaTerm.icns
 
 build/obj/%.o: %.c
 	@mkdir -p $(dir $@)
@@ -28,6 +28,10 @@ build/obj/%.o: %.m
 $(APP)/Contents/MacOS/pumaterm: $(OBJ)
 	@mkdir -p $(dir $@)
 	$(CC) $(ARCH) -mmacosx-version-min=10.5 -o $@ $(OBJ) $(FRAMEWORKS) -lutil
+
+$(APP)/Contents/Resources/PumaTerm.icns: icon/PumaTerm.icns
+	@mkdir -p $(dir $@)
+	cp $< $@
 
 $(APP)/Contents/Info.plist: Info.plist
 	@mkdir -p $(dir $@)

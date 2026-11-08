@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleExecutable</key>		<string>pumaterm</string>
+	<key>CFBundleIconFile</key>		<string>PumaTerm</string>
 	<key>CFBundleIdentifier</key>		<string>org.xnu-t4240.pumaterm</string>
 	<key>CFBundleName</key>			<string>PumaTerm</string>
 	<key>CFBundlePackageType</key>		<string>APPL</string>

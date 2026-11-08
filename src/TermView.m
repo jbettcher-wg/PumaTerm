@@ -17,7 +17,9 @@
 #include <OpenGL/gl.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <ctype.h>
+#include <poll.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -116,18 +118,17 @@ static void dump_frame(int w, int h)
 
 static int cb_damage(VTermRect r, void *user)
 {
-	(void)r;
-	[(TermView *)user setNeedsDisplay:YES];
+	[(TermView *)user damageRows:r.start_row to:r.end_row - 1];
 	return 1;
 }
 
 static int cb_movecursor(VTermPos pos, VTermPos old, int visible, void *user)
 {
 	TermView *v = user;
-	(void)old;
 	(void)visible;
 	[v setValue:[NSValue valueWithBytes:&pos objCType:@encode(VTermPos)] forKey:@"cursorPos"];
-	[v setNeedsDisplay:YES];
+	[v damageRows:old.row to:old.row];
+	[v damageRows:pos.row to:pos.row];
 	return 1;
 }
 
@@ -386,14 +387,15 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 	[self setNeedsDisplay:YES];
 }
 
-static unsigned blink_ticks, frames_drawn;
+static unsigned blink_ticks, frames_drawn, cpu_frames;
+static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 
 - (void)blink:(NSTimer *)t
 {
 	(void)t;
 	blink_ticks++;
 	blinkOn = !blinkOn;
-	[self setNeedsDisplay:YES];
+	[self damageRows:cursor.row to:cursor.row];
 }
 
 - (void)endFlash:(id)o
@@ -436,9 +438,47 @@ static unsigned blink_ticks, frames_drawn;
  * child, when it is the one drawing, has to hear it too. */
 - (void)setNeedsDisplay:(BOOL)flag
 {
+	if (flag)
+		dirtyAll = YES;
 	[super setNeedsDisplay:flag];
 	if (useGL)
 		[glView setNeedsDisplay:flag];
+}
+
+/*
+ * Rows of the live screen that changed. The CPU path rebuilds and redraws
+ * only these, and asks the window server to take only their band; GL
+ * draws everything anyway, so it is just told to draw.
+ */
+- (void)damageRows:(int)a to:(int)b
+{
+	NSRect bd = [self bounds];
+
+	if (scrollOffset) {			/* history on screen: rows move */
+		[self setNeedsDisplay:YES];
+		return;
+	}
+	if (a < 0) a = 0;
+	if (b >= rows) b = rows - 1;
+	if (b < a)
+		return;
+	if (dirtyR1 < dirtyR0) {
+		dirtyR0 = a;
+		dirtyR1 = b;
+	} else {
+		if (a < dirtyR0) dirtyR0 = a;
+		if (b > dirtyR1) dirtyR1 = b;
+	}
+	if (useGL) {
+		[glView setNeedsDisplay:YES];
+		return;
+	}
+	/* bottom-up view coordinates; the last row's band runs to the edge */
+	{
+		float top = bd.size.height - a * cellH;
+		float bot = b == rows - 1 ? 0 : bd.size.height - (b + 1) * cellH;
+		[super setNeedsDisplayInRect:NSMakeRect(0, bot, bd.size.width, top - bot)];
+	}
 }
 
 /* KVC targets for the C callbacks. */
@@ -533,10 +573,38 @@ static unsigned blink_ticks, frames_drawn;
 			postNotificationName:TermShellExitedNotification object:self];
 		return;
 	}
-	vterm_input_write(vt, [d bytes], [d length]);
-	vterm_screen_flush_damage(screen);
-	if (scrollOffset)			/* new output returns to live */
+	if (scrollOffset) {			/* new output returns to live */
 		scrollOffset = 0;
+		[self setNeedsDisplay:YES];
+	}
+	vterm_input_write(vt, [d bytes], [d length]);
+	{
+		/*
+		 * A program's screen update often arrives in several reads
+		 * (btop's measured as a few kilobytes at a time), and drawing
+		 * between them shows the picture being laid down in bands. So
+		 * whatever is already waiting is read now, before this run-loop
+		 * pass draws, for up to 8 ms. No background read is pending
+		 * here (it is re-armed below), so reading the fd is safe.
+		 */
+		static char buf[65536];
+		struct timeval t0, t;
+		gettimeofday(&t0, NULL);
+		for (;;) {
+			struct pollfd p = { masterFd, POLLIN, 0 };
+			ssize_t got;
+			if (poll(&p, 1, 1) <= 0 || !(p.revents & POLLIN))
+				break;
+			got = read(masterFd, buf, sizeof buf);
+			if (got <= 0)
+				break;		/* EOF: the background read reports it */
+			vterm_input_write(vt, buf, (size_t)got);
+			gettimeofday(&t, NULL);
+			if ((t.tv_sec - t0.tv_sec) * 1000000 + (t.tv_usec - t0.tv_usec) > 8000)
+				break;
+		}
+	}
+	vterm_screen_flush_damage(screen);
 	[ptyHandle readInBackgroundAndNotify];
 }
 
@@ -657,7 +725,7 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 /* Every cell's quad, then line and cursor quads, into verts/fgc/bgc: the
  * one description of the picture both drawing paths consume. Returns the
  * vertex count; *clear gets the default background, premultiplied. */
-- (int)buildQuads:(GLubyte *)clear
+- (int)buildQuads:(GLubyte *)clear rows:(int)r0 to:(int)r1
 {
 	frames_drawn++;
 	/* Per cell: its quad plus up to three line quads (double underline
@@ -694,7 +762,7 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	memcpy(curc, cursorRGB, 3); curc[3] = 255;
 	memcpy(selc, selRGB, 3); selc[3] = 255;
 
-	for (r = 0; r < rows; r++) {
+	for (r = r0; r <= r1; r++) {
 		for (c = 0; c < cols; c++) {
 			VTermScreenCell cell;
 			GLubyte fg[4], bg[4];
@@ -823,7 +891,10 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	int n;
 
 	[[glView openGLContext] makeCurrentContext];
-	n = [self buildQuads:clear];
+	n = [self buildQuads:clear rows:0 to:rows - 1];
+	dirtyAll = NO;
+	dirtyR0 = 1;
+	dirtyR1 = 0;
 	glViewport(0, 0, (GLsizei)b.size.width, (GLsizei)b.size.height);
 	glClearColor(clear[0] / 255.0f, clear[1] / 255.0f, clear[2] / 255.0f, 1);
 	glClear(GL_COLOR_BUFFER_BIT);
@@ -905,9 +976,11 @@ static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
 	CGContextRef ctx;
 	CGImageRef img;
 
-	(void)dirty;
+	struct timeval tA, tB;
+
 	if (useGL || w <= 0 || h <= 0)
 		return;
+	gettimeofday(&tA, NULL);
 	if (w != cpuW || h != cpuH) {
 		free(cpuPix);
 		cpuPix = malloc((size_t)w * h * 4);
@@ -922,10 +995,29 @@ static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
 			CGColorSpaceRelease(cs);
 		}
 	}
-	n = [self buildQuads:clear];
-	cl = premul(clear);
-	for (y = 0; y < w * h; y++)
-		cpuPix[y] = cl;
+	if (dirtyAll || w != lastW || h != lastH) {
+		dirtyR0 = 0;
+		dirtyR1 = rows - 1;
+	}
+	lastW = w;
+	lastH = h;
+	n = 0;
+	if (dirtyR0 <= dirtyR1) {
+		int py0 = dirtyR0 * cellH, py1 = dirtyR1 == rows - 1 ? h : (dirtyR1 + 1) * cellH;
+
+		struct timeval tq;
+		n = [self buildQuads:clear rows:dirtyR0 to:dirtyR1];
+		gettimeofday(&tq, NULL);
+		cpu_build_us += (tq.tv_sec - tA.tv_sec) * 1e6 + (tq.tv_usec - tA.tv_usec);
+		cpu_rows += dirtyR1 - dirtyR0 + 1;
+		cl = premul(clear);
+		if (py1 > h) py1 = h;
+		for (y = py0 * w; y < py1 * w; y++)	/* this band only */
+			cpuPix[y] = cl;
+	}
+	dirtyAll = NO;
+	dirtyR0 = 1;
+	dirtyR1 = 0;
 	for (q = 0; q < n; q += 4) {
 		const float *v0 = verts + q * 4, *v2 = verts + (q + 2) * 4;
 		int x0 = (int)v0[0], y0 = (int)v0[1], x1 = (int)v2[0], y1 = (int)v2[1];
@@ -952,10 +1044,40 @@ static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
 			}
 		}
 	}
-	img = CGBitmapContextCreateImage(cpuCtx);
+	{
+		struct timeval tr;
+		gettimeofday(&tr, NULL);
+		cpu_raster_us += (tr.tv_sec - tA.tv_sec) * 1e6 + (tr.tv_usec - tA.tv_usec);
+	}
+	/* An image straight over the buffer: CGBitmapContextCreateImage
+	 * snapshots copy-on-write, so the next frame's first store copied
+	 * all of it. This one is drawn and released before the buffer is
+	 * written again. */
+	{
+		CGDataProviderRef dp = CGDataProviderCreateWithData(NULL, cpuPix, (size_t)w * h * 4, NULL);
+		CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+		img = CGImageCreate(w, h, 8, 32, (size_t)w * 4, cs,
+			kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host, dp, NULL, false,
+			kCGRenderingIntentDefault);
+		CGColorSpaceRelease(cs);
+		CGDataProviderRelease(dp);
+	}
 	ctx = [[NSGraphicsContext currentContext] graphicsPort];
 	CGContextSetBlendMode(ctx, kCGBlendModeCopy);
-	CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), img);
+	{
+		/* Only the part the window server asked for: the image's rows
+		 * run top-down, the view's coordinates bottom-up. */
+		NSRect d = NSIntersectionRect(NSIntegralRect(dirty), b);
+		CGImageRef part = CGImageCreateWithImageInRect(img,
+			CGRectMake(d.origin.x, h - d.origin.y - d.size.height, d.size.width, d.size.height));
+		if (part) {
+			CGContextDrawImage(ctx, NSRectToCGRect(d), part);
+			CGImageRelease(part);
+		}
+	}
+	gettimeofday(&tB, NULL);
+	cpu_frames++;
+	cpu_us += (tB.tv_sec - tA.tv_sec) * 1e6 + (tB.tv_usec - tA.tv_usec);
 	if (dump_requested) {
 		CFURLRef url = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/pumaterm-frame.png"),
 							     kCFURLPOSIXPathStyle, false);
@@ -970,8 +1092,11 @@ static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
 		CFRelease(url);
 		/* the backing store reaches the screen after this returns */
 		[self performSelector:@selector(dumpWindowLater) withObject:nil afterDelay:0.3];
-		printf("dumped (CPU): %s blink ticks %u frames %u blinkOn %d\n", [[self title] UTF8String],
-		       blink_ticks, frames_drawn, blinkOn);
+		printf("dumped (CPU): %s blink ticks %u frames %u blinkOn %d; cpu frames %u, %.0f us (build %.0f, to raster end %.0f) and %.1f rows each\n",
+		       [[self title] UTF8String], blink_ticks, frames_drawn, blinkOn,
+		       cpu_frames, cpu_frames ? cpu_us / cpu_frames : 0,
+		       cpu_frames ? cpu_build_us / cpu_frames : 0, cpu_frames ? cpu_raster_us / cpu_frames : 0,
+		       cpu_frames ? cpu_rows / cpu_frames : 0);
 		fflush(stdout);
 	}
 	CGImageRelease(img);
