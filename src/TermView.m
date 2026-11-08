@@ -549,8 +549,18 @@ static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 
 - (void)typeStartup:(NSString *)s
 {
-	NSMutableString *m = [NSMutableString stringWithString:s];
+	NSMutableString *m;
 	const char *u;
+	NSRange pause = [s rangeOfString:@"\\p"];
+
+	/* "\p" pauses two seconds: keys for a program that has to start
+	 * first, and that flushes typed-ahead input as it does. */
+	if (pause.location != NSNotFound) {
+		[self performSelector:@selector(typeStartup:)
+			   withObject:[s substringFromIndex:NSMaxRange(pause)] afterDelay:2.0];
+		s = [s substringToIndex:pause.location];
+	}
+	m = [NSMutableString stringWithString:s];
 
 	[m replaceOccurrencesOfString:@"\\n" withString:@"\r"
 			      options:0 range:NSMakeRange(0, [m length])];
