@@ -75,6 +75,7 @@ static NSMenu *build_menu(void)
 	[app addItemWithTitle:@"Hide term" action:@selector(hide:) keyEquivalent:@"h"];
 	[app addItem:[NSMenuItem separatorItem]];
 	[app addItemWithTitle:@"Quit term" action:@selector(terminate:) keyEquivalent:@"q"];
+	[edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
 	[edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
 	[win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
 	[win addItemWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"];

@@ -135,6 +135,11 @@ void atlas_destroy(GlyphAtlas *a)
 	free(a);
 }
 
+float atlas_descent(const GlyphAtlas *a)
+{
+	return a->descent;
+}
+
 void atlas_metrics(const GlyphAtlas *a, int *cell_w, int *cell_h)
 {
 	*cell_w = a->cell_w;

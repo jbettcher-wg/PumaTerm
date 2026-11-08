@@ -36,15 +36,22 @@ variant: its icons are one cell wide, as a cell grid needs. A family's own
 bold and italic faces are used when Core Text finds them; Monaco, which
 has neither, gets a stroked bold and a sheared italic.
 Shift-PageUp/PageDown and the scroll wheel scroll back; Cmd-V pastes
-(bracketed); Option is Meta.
+(bracketed); Option is Meta. Drag selects, double-click takes a word (path
+and URL punctuation included), triple-click a line; Shift selects even when
+a program has the mouse (btop, vim with mouse=a). Cmd-C copies, with lines
+the terminal wrapped joined back into one.
 
 Test hooks (for checking rendering over ssh without touching the desktop):
 `TERM_STARTUP_INPUT='btop\n'` types into the shell after start and opens the
 window behind the others; `kill -USR1 <pid>` writes the next frame to
-`/tmp/term-frame.png`. `proving-ground/board/termtest.sh` drives both.
+`/tmp/term-frame.png`; `TERM_TEST_SELECT="line col line col unit"` (unit 1
+cell, 2 word, 3 line) makes that selection at the dump and prints what Copy
+would take to stdout, so the clipboard is never touched.
+`proving-ground/board/termtest.sh` drives all three, and passes `TERM_ARGS`
+(e.g. `-Font HackNFM-Regular`) through.
 
 Measured on board 1, 2026-11-08: btop 1.4.8 draws all panels, 24 CPU
 threads, truecolor theme, braille meters and box-drawn frames.
 
-Not yet: copy (selection), multiple windows/tabs, underline/strikethrough
-drawing, combining characters, font fallback for colour emoji.
+Not yet: multiple windows/tabs, combining characters drawn over their base,
+colour emoji, a preferences window.

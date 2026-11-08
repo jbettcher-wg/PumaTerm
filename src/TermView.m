@@ -16,7 +16,9 @@
 
 #include <OpenGL/gl.h>
 #include <ApplicationServices/ApplicationServices.h>
+#include <ctype.h>
 #include <signal.h>
+#include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -28,6 +30,11 @@
 
 /* Test hook: SIGUSR1 asks the next frame to be written to /tmp/term-frame.png,
  * so rendering can be checked over ssh without disturbing the desktop. */
+static int pos_cmp(VTermPos a, VTermPos b)
+{
+	return a.row != b.row ? a.row - b.row : a.col - b.col;
+}
+
 static volatile sig_atomic_t dump_requested;
 static void on_usr1(int sig) { (void)sig; dump_requested = 1; }
 
@@ -71,6 +78,11 @@ static void dump_frame(int w, int h)
 - (void)setTitle:(NSString *)t;
 - (int)cellAtRow:(int)r col:(int)c into:(VTermScreenCell *)cellOut;
 - (void)pollDump:(NSTimer *)t;
+- (void)shiftSelection:(int)d;
+- (VTermPos)lineAt:(NSEvent *)e;
+- (BOOL)isSelectedLine:(int)line col:(int)c;
+- (BOOL)mouseIsReported:(NSEvent *)e;
+- (void)expand:(VTermPos)p unit:(int)unit from:(VTermPos *)a to:(VTermPos *)b;
 - (void)typeStartup:(NSString *)s;
 @end
 
@@ -269,8 +281,25 @@ static GLuint compile(GLenum type, const char *src)
 - (void)pollDump:(NSTimer *)t
 {
 	(void)t;
-	if (dump_requested)
+	if (dump_requested) {
+		/* Test hook: TERM_TEST_SELECT="line col line col unit" makes the
+		 * selection a click at the first cell and a drag to the second
+		 * would, and prints what Copy would take, before the frame dump. */
+		const char *sel = getenv("TERM_TEST_SELECT");
+		VTermPos a, b, p, q;
+		static int selTested;
+
+		if (sel && !selTested++ && sscanf(sel, "%d %d %d %d %d", &p.row, &p.col, &q.row, &q.col, &selUnit) == 5) {
+			[self expand:p unit:selUnit from:&anchorA to:&anchorB];
+			[self expand:q unit:selUnit from:&a to:&b];
+			selA = pos_cmp(a, anchorA) < 0 ? a : anchorA;
+			selB = pos_cmp(b, anchorB) > 0 ? b : anchorB;
+			selActive = YES;
+			printf("selection: [%s]\n", [[self selectionText] UTF8String]);
+			fflush(stdout);
+		}
 		[self setNeedsDisplay:YES];
+	}
 }
 
 - (void)typeStartup:(NSString *)s
@@ -320,6 +349,7 @@ static GLuint compile(GLenum type, const char *src)
 	sbHead = (sbHead + 1) % SCROLLBACK;
 	if (sbCount < SCROLLBACK)
 		sbCount++;
+	[self shiftSelection:-1];
 	return 1;
 }
 
@@ -346,6 +376,7 @@ static GLuint compile(GLenum type, const char *src)
 	free(l->cells);
 	l->cells = NULL;
 	l->cols = 0;
+	[self shiftSelection:1];
 	return 1;
 }
 
@@ -404,7 +435,12 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 - (void)drawRect:(NSRect)dirty
 {
 	NSRect b = [self bounds];
-	int r, c, n = 0, need = rows * cols * 4;
+	/* Per cell: its quad plus up to three line quads (double underline
+	 * and strikethrough). */
+	int r, c, n = 0, need = rows * cols * 4 * 4;
+	int nl = 0, lineCap = rows * cols * 3 * 4, thick = cellH >= 28 ? 2 : 1;
+	float *lv;
+	GLubyte *lc;
 	float proj[16] = { 0 };
 	GLubyte defbg[4];
 
@@ -416,6 +452,10 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 		fgc = realloc(fgc, 4 * need);
 		bgc = realloc(bgc, 4 * need);
 	}
+	/* Line quads go in the top three quarters of each array, after the
+	 * cells, and are packed down behind them before the draw. */
+	lv = verts + (size_t)(need - lineCap) * 4;
+	lc = fgc + (size_t)(need - lineCap) * 4;
 	{
 		VTermColor fg, bg;
 		vterm_state_get_default_colors(vterm_obtain_state(vt), &fg, &bg);
@@ -448,7 +488,7 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 			}
 			isCursor = cursorVisible && scrollOffset == 0 &&
 				   r == cursor.row && c == cursor.col && [[self window] isKeyWindow];
-			if (isCursor) {
+			if (isCursor != [self isSelectedLine:r - scrollOffset col:c]) {
 				GLubyte t[4];
 				memcpy(t, fg, 4); memcpy(fg, bg, 4); memcpy(bg, t, 4);
 			}
@@ -470,8 +510,40 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 				memcpy(bgc + (n + k) * 4, bg, 4);
 			}
 			n += 4;
+
+			/* Underline just below the baseline, a second one under it
+			 * for SGR 21; curly (4:3) draws straight. Strikethrough at
+			 * half the x-height, which is about 0.62 of the cell. */
+			if (!cell.attrs.conceal) {
+				float ys[3];
+				int m = 0, j;
+				float base = y1 - atlas_descent(atlas);
+
+				if (cell.attrs.underline) {
+					ys[m++] = base + 1;
+					if (cell.attrs.underline == VTERM_UNDERLINE_DOUBLE)
+						ys[m++] = base + 1 + 2 * thick;
+				}
+				if (cell.attrs.strike)
+					ys[m++] = y0 + roundf(cellH * 0.62f);
+				for (j = 0; j < m; j++) {
+					float q[16] = { x0, ys[j], 0, 0,  x1, ys[j], 0, 0,
+							x1, ys[j] + thick, 0, 0,  x0, ys[j] + thick, 0, 0 };
+					memcpy(lv + nl * 4, q, sizeof q);
+					for (k = 0; k < 4; k++)
+						memcpy(lc + (nl + k) * 4, fg, 4);
+					nl += 4;
+				}
+			}
 		}
 	}
+
+	/* A quad whose two colours are equal draws that colour whatever the
+	 * atlas holds, so the lines need no texture of their own. */
+	memmove(verts + n * 4, lv, sizeof(float) * 4 * nl);
+	memmove(fgc + n * 4, lc, 4 * nl);
+	memcpy(bgc + n * 4, fgc + n * 4, 4 * nl);
+	n += nl;
 
 	glViewport(0, 0, (GLsizei)b.size.width, (GLsizei)b.size.height);
 	glClearColor(defbg[0] / 255.0f, defbg[1] / 255.0f, defbg[2] / 255.0f, 1);
@@ -587,6 +659,10 @@ static VTermModifier mods_of(NSEvent *e)
 	}
 
 	scrollOffset = 0;
+	if (selActive) {		/* typing drops the selection */
+		selActive = NO;
+		[self setNeedsDisplay:YES];
+	}
 	if (key != VTERM_KEY_NONE) {
 		vterm_keyboard_key(vt, key, mod);
 	} else if (mod & (VTERM_MOD_CTRL | VTERM_MOD_ALT)) {
@@ -633,6 +709,11 @@ static VTermModifier mods_of(NSEvent *e)
 		[self paste:nil];
 		return YES;
 	}
+	if (([e modifierFlags] & NSCommandKeyMask) &&
+	    [[e charactersIgnoringModifiers] isEqualToString:@"c"]) {
+		[self copy:nil];
+		return YES;
+	}
 	return [super performKeyEquivalent:e];
 }
 
@@ -665,11 +746,195 @@ static VTermModifier mods_of(NSEvent *e)
 		vterm_mouse_button(vt, button, pressed, mods_of(e));
 }
 
-- (void)mouseDown:(NSEvent *)e		{ [self mouseEvent:e button:1 pressed:YES]; }
-- (void)mouseUp:(NSEvent *)e		{ [self mouseEvent:e button:1 pressed:NO]; }
+/* The mouse belongs to the program when it asked for reports; Shift takes
+ * it back for selecting, as in xterm. */
+- (BOOL)mouseIsReported:(NSEvent *)e
+{
+	return mouseMode != VTERM_PROP_MOUSE_NONE && !([e modifierFlags] & NSShiftKeyMask);
+}
+
+- (void)mouseDown:(NSEvent *)e
+{
+	VTermPos p;
+
+	if ([self mouseIsReported:e]) {
+		[self mouseEvent:e button:1 pressed:YES];
+		return;
+	}
+	p = [self lineAt:e];
+	selUnit = [e clickCount] >= 3 ? 3 : [e clickCount] == 2 ? 2 : 1;
+	[self expand:p unit:selUnit from:&anchorA to:&anchorB];
+	selA = anchorA;
+	selB = anchorB;
+	/* A single click only places the anchor; dragging makes a selection. */
+	selActive = selUnit > 1;
+	[self setNeedsDisplay:YES];
+}
+
+- (void)mouseDragged:(NSEvent *)e
+{
+	VTermPos p, a, b;
+
+	if ([self mouseIsReported:e]) {
+		[self mouseEvent:e button:0 pressed:NO];
+		return;
+	}
+	p = [self lineAt:e];
+	[self expand:p unit:selUnit from:&a to:&b];
+	selA = pos_cmp(a, anchorA) < 0 ? a : anchorA;
+	selB = pos_cmp(b, anchorB) > 0 ? b : anchorB;
+	selActive = YES;
+	[self setNeedsDisplay:YES];
+}
+
+- (void)mouseUp:(NSEvent *)e
+{
+	if ([self mouseIsReported:e])
+		[self mouseEvent:e button:1 pressed:NO];
+}
+
 - (void)rightMouseDown:(NSEvent *)e	{ [self mouseEvent:e button:3 pressed:YES]; }
 - (void)rightMouseUp:(NSEvent *)e	{ [self mouseEvent:e button:3 pressed:NO]; }
-- (void)mouseDragged:(NSEvent *)e	{ [self mouseEvent:e button:0 pressed:NO]; }
+
+/* ---- selection ------------------------------------------------------- */
+
+/* The line and column under the mouse, clamped to what exists. */
+- (VTermPos)lineAt:(NSEvent *)e
+{
+	NSPoint p = [self convertPoint:[e locationInWindow] fromView:nil];
+	VTermPos q;
+	int row = (int)floorf(([self bounds].size.height - p.y) / cellH);
+
+	if (row < 0) row = 0;
+	if (row >= rows) row = rows - 1;
+	q.row = row - scrollOffset;
+	q.col = (int)(p.x / cellW);
+	if (q.col < 0) q.col = 0;
+	if (q.col >= cols) q.col = cols - 1;
+	return q;
+}
+
+- (void)shiftSelection:(int)d
+{
+	anchorA.row += d; anchorB.row += d;
+	selA.row += d; selB.row += d;
+	if (selActive && selB.row < -sbCount)	/* scrolled out of history */
+		selActive = NO;
+}
+
+- (BOOL)isSelectedLine:(int)line col:(int)c
+{
+	VTermPos p = { line, c };
+
+	return selActive && pos_cmp(p, selA) >= 0 && pos_cmp(p, selB) <= 0;
+}
+
+- (uint32_t)charAtLine:(int)line col:(int)c
+{
+	VTermScreenCell cell;
+
+	if (![self cellAtRow:line + scrollOffset col:c into:&cell] || cell.chars[0] == 0)
+		return ' ';
+	return cell.chars[0];
+}
+
+/* What a double click takes as one word: letters and digits plus the
+ * punctuation of paths, URLs and identifiers. */
+static int word_char(uint32_t ch)
+{
+	return ch > 127 ? ch != 0xA0 : (isalnum((int)ch) || strchr("-_./~:@%+#?=&", (int)ch) != NULL);
+}
+
+- (void)expand:(VTermPos)p unit:(int)unit from:(VTermPos *)a to:(VTermPos *)b
+{
+	*a = *b = p;
+	if (unit == 3) {
+		a->col = 0;
+		b->col = cols - 1;
+	} else if (unit == 2 && word_char([self charAtLine:p.row col:p.col])) {
+		while (a->col > 0 && word_char([self charAtLine:p.row col:a->col - 1]))
+			a->col--;
+		while (b->col < cols - 1 && word_char([self charAtLine:p.row col:b->col + 1]))
+			b->col++;
+	}
+}
+
+static void put_utf8(NSMutableData *d, uint32_t ch)
+{
+	unsigned char u[4];
+	int n;
+
+	if (ch < 0x80)		{ u[0] = ch; n = 1; }
+	else if (ch < 0x800)	{ u[0] = 0xC0 | ch >> 6; u[1] = 0x80 | (ch & 0x3F); n = 2; }
+	else if (ch < 0x10000)	{ u[0] = 0xE0 | ch >> 12; u[1] = 0x80 | ((ch >> 6) & 0x3F);
+				  u[2] = 0x80 | (ch & 0x3F); n = 3; }
+	else			{ u[0] = 0xF0 | ch >> 18; u[1] = 0x80 | ((ch >> 12) & 0x3F);
+				  u[2] = 0x80 | ((ch >> 6) & 0x3F); u[3] = 0x80 | (ch & 0x3F); n = 4; }
+	[d appendBytes:u length:n];
+}
+
+/* The selected text, one line per screen line with trailing blanks
+ * dropped; a line the terminal wrapped joins its continuation without a
+ * newline, so a long command copies as the command. */
+- (NSString *)selectionText
+{
+	NSMutableData *d = [NSMutableData data];
+	int line;
+
+	if (!selActive)
+		return nil;
+	for (line = selA.row; line <= selB.row; line++) {
+		int c0 = line == selA.row ? selA.col : 0;
+		int c1 = line == selB.row ? selB.col : cols - 1;
+		NSUInteger keep;
+		int c, k, wrapped = 0;
+
+		if (line >= 0 && line < rows - 1) {
+			VTermLineInfo const *li = vterm_state_get_lineinfo(vterm_obtain_state(vt), line + 1);
+			wrapped = li && li->continuation && line != selB.row;
+		}
+		keep = [d length];
+		for (c = c0; c <= c1; c++) {
+			VTermScreenCell cell;
+
+			if (![self cellAtRow:line + scrollOffset col:c into:&cell] || cell.chars[0] == 0) {
+				[d appendBytes:" " length:1];
+				continue;
+			}
+			if (cell.width == 0)
+				continue;
+			for (k = 0; k < VTERM_MAX_CHARS_PER_CELL && cell.chars[k]; k++)
+				put_utf8(d, cell.chars[k]);
+			if (cell.width == 2)
+				c++;
+		}
+		if (!wrapped) {
+			/* trim the line's trailing blanks, then end it */
+			const char *p = [d bytes];
+			NSUInteger len = [d length];
+			while (len > keep && p[len - 1] == ' ')
+				len--;
+			[d setLength:len];
+			if (line != selB.row)
+				[d appendBytes:"\n" length:1];
+		}
+	}
+	return [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease];
+}
+
+- (void)copy:(id)sender
+{
+	NSString *s = [self selectionText];
+	NSPasteboard *pb = [NSPasteboard generalPasteboard];
+
+	(void)sender;
+	if ([s length] == 0) {
+		NSBeep();
+		return;
+	}
+	[pb declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
+	[pb setString:s forType:NSStringPboardType];
+}
 
 - (void)dealloc
 {

@@ -13,6 +13,7 @@ void        atlas_destroy(GlyphAtlas *a);
 
 /* Cell size in pixels, and the baseline's distance from the cell bottom. */
 void atlas_metrics(const GlyphAtlas *a, int *cell_w, int *cell_h);
+float atlas_descent(const GlyphAtlas *a);
 
 /* Texture coordinates {u0, v0, u1, v1} of the glyph for code point cp,
  * rasterizing and uploading it on first use. wide = 2 for a double-width
