@@ -39,6 +39,11 @@ running 10.5.8 with the RadeonNI driver (`GL_VERSION 2.1 Mesa RadeonNI`).
 | `src/PrefsWindow.m` | Preferences (Cmd-,): General, Appearance, Colors, built in code |
 | `src/main.m` | the app: menu bar and windows, no nib |
 
+## Installing
+
+Download `PumaTerm-0.1.dmg` from the Releases page, open it, and drag
+PumaTerm onto Applications.
+
 ## Building
 
 On Mac OS X 10.5 with the Xcode 3.1 developer tools (Apple's gcc-4.2 and the
@@ -46,6 +51,10 @@ On Mac OS X 10.5 with the Xcode 3.1 developer tools (Apple's gcc-4.2 and the
 
     make            # -> build/PumaTerm.app
     make install    # -> /Applications/PumaTerm.app
+
+`tools/make-dmg.sh` then makes `build/PumaTerm-<version>.dmg`, the
+drag-to-Applications disk image (run it as the logged-in user: Finder lays
+out its window).
 
 There is no Xcode project and no nib: the bundle is the binary, its
 Info.plist and the icon. libvterm is vendored unmodified under

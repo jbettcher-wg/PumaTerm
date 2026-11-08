@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The DMG window's background, 540 x 380 points: the app on the left, the
+     Applications folder on the right (tools/make-dmg.sh puts them at
+     x 140 and 400, y 175), an arrow between in the icon's blue and green. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="540" height="380" viewBox="0 0 540 380">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f4f5f7"/>
+      <stop offset="1" stop-color="#d9dde3"/>
+    </linearGradient>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2f95ff"/>
+      <stop offset="1" stop-color="#22c96f"/>
+    </linearGradient>
+  </defs>
+  <rect width="540" height="380" fill="url(#bg)"/>
+  <text x="270" y="58" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="22" font-weight="bold" fill="#2b2f36">PumaTerm</text>
+  <text x="270" y="82" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="13" fill="#5a606a">An OpenGL-accelerated terminal for Mac OS X</text>
+  <!-- the arrow -->
+  <path d="M222 175 L300 175" stroke="url(#arrow)" stroke-width="10" stroke-linecap="round"/>
+  <path d="M292 155 L318 175 L292 195" fill="none" stroke="#22c96f" stroke-width="10"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="270" y="318" text-anchor="middle" font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="13" fill="#5a606a">Drag PumaTerm onto Applications to install it.</text>
+</svg>
