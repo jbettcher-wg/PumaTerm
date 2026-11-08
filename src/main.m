@@ -95,7 +95,8 @@
 			[NSFont systemFontOfSize:11], NSFontAttributeName,
 			ps, NSParagraphStyleAttributeName, nil]] autorelease];
 	[o setObject:@"PumaTerm" forKey:@"ApplicationName"];
-	[o setObject:@"0.1" forKey:@"ApplicationVersion"];
+	[o setObject:[[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"]
+	      forKey:@"ApplicationVersion"];	/* one version, in Info.plist */
 	[o setObject:@"" forKey:@"Version"];
 	[o setObject:@"Jordan Bettcher" forKey:@"Copyright"];
 	[o setObject:credits forKey:@"Credits"];

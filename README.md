@@ -41,7 +41,7 @@ running 10.5.8 with the RadeonNI driver (`GL_VERSION 2.1 Mesa RadeonNI`).
 
 ## Installing
 
-Download `PumaTerm-0.1.dmg` from the Releases page, open it, and drag
+Download `PumaTerm-0.1.1.dmg` from the Releases page, open it, and drag
 PumaTerm onto Applications.
 
 ## Building
