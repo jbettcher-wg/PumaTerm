@@ -1,5 +1,6 @@
 /* Prefs.h -- PumaTerm's settings: the keys, their defaults, colour schemes. */
 #import <Cocoa/Cocoa.h>
+#include <stdlib.h>
 
 /* Posted when any setting changes; open windows re-read what they use. */
 extern NSString *const PrefsChangedNotification;
@@ -28,6 +29,16 @@ extern NSString *const PrefsChangedNotification;
 #define kPrefOptionMeta		@"OptionIsMeta"
 
 enum { CursorBlock, CursorUnderline, CursorBar };
+
+/* A PUMATERM_* test hook's value, or NULL when unset or empty: the test
+ * script passes every hook, empty when unused, and an empty one must not
+ * count as set. */
+static inline const char *test_env(const char *name)
+{
+	const char *v = getenv(name);
+
+	return v && *v ? v : NULL;
+}
 enum { BellNone, BellVisual, BellAudible };
 
 void      prefs_register(void);

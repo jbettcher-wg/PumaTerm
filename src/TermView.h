@@ -14,10 +14,24 @@ typedef struct {
 	VTermScreenCell *cells;
 } SBLine;
 
+@class TermView;
+
+/* The GL drawing surface, a child of the TermView while it is opaque. */
+@interface TermGLView : NSOpenGLView {
+	TermView	*owner;			/* not retained: it owns us */
+}
+- (id)initWithFrame:(NSRect)frame terminal:(TermView *)o;
+@end
+
 /* The instance variables live here and not in a class extension: 32-bit
  * PowerPC on 10.5 is the legacy Objective-C runtime, which has no
  * extension ivars. */
-@interface TermView : NSOpenGLView {
+@interface TermView : NSView {
+	TermGLView	*glView;
+	BOOL		 useGL;			/* opaque: GL; translucent: CPU */
+	uint32_t	*cpuPix;		/* the CPU path's frame */
+	int		 cpuW, cpuH;
+	CGContextRef	 cpuCtx;
 	VTerm		*vt;
 	VTermScreen	*screen;
 	GlyphAtlas	*atlas;
@@ -68,6 +82,9 @@ typedef struct {
 - (void)applyPrefs;		/* re-read settings; may change cellSize */
 - (void)ringBell;
 - (void)shutdown;		/* stop timers, hang up: before release */
+- (void)glPrepare;		/* for TermGLView */
+- (void)glDraw;
+- (void)resizeTerminal;
 - (NSString *)selectionText;
 - (void)copy:(id)sender;
 @end

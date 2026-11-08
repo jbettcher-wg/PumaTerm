@@ -1,5 +1,6 @@
 /*
- * GlyphAtlas.m -- rasterize glyphs once, into a 2048 x 2048 GL_ALPHA texture.
+ * GlyphAtlas.m -- rasterize glyphs once, into a 2048 x 2048 coverage atlas
+ * kept on the CPU and mirrored into a GL_ALPHA texture.
  *
  * Every slot is two cells wide (so a double-width glyph fits) and one cell
  * high; slot 0 stays blank and is what a space maps to. Lookups go through a
@@ -41,6 +42,9 @@ struct GlyphAtlas {
 	float		descent;
 	int		slot_w, slots_x, slots_y, next_slot;
 	GLuint		tex;
+	unsigned char  *mirror;			/* the whole atlas on the CPU */
+	int	       *dirty, ndirty;		/* slots not yet in the texture */
+	int		dirty_all;
 	unsigned char  *bitmap;			/* one slot's pixels */
 	CGContextRef	ctx;
 	struct entry	table[TABLE_SIZE];
@@ -106,6 +110,8 @@ GlyphAtlas *atlas_create(const char *font_name, float point_size)
 	a->slots_x = ATLAS_SIZE / a->slot_w;
 	a->slots_y = ATLAS_SIZE / a->cell_h;
 	a->next_slot = 1;
+	a->mirror = calloc(ATLAS_SIZE, ATLAS_SIZE);
+	a->dirty = malloc(sizeof(int) * a->slots_x * a->slots_y);
 
 	a->bitmap = calloc((size_t)a->slot_w * a->cell_h, 1);
 	gray = CGColorSpaceCreateDeviceGray();
@@ -129,6 +135,8 @@ void atlas_destroy(GlyphAtlas *a)
 		glDeleteTextures(1, &a->tex);
 	CGContextRelease(a->ctx);
 	free(a->bitmap);
+	free(a->mirror);
+	free(a->dirty);
 	CFRelease(a->font);
 	for (i = 0; i < 4; i++)
 		CFRelease(a->face[i]);
@@ -146,12 +154,21 @@ void atlas_metrics(const GlyphAtlas *a, int *cell_w, int *cell_h)
 	*cell_h = a->cell_h;
 }
 
+const unsigned char *atlas_mirror(const GlyphAtlas *a)
+{
+	return a->mirror;
+}
+
+/* Glyphs are rasterised into the CPU mirror, which the software path reads
+ * directly; the texture catches up here, slot by slot, so that rasterising
+ * needs no GL context. */
 GLuint atlas_texture(GlyphAtlas *a)
 {
-	if (a->tex == 0) {
-		unsigned char *zero = calloc(ATLAS_SIZE, ATLAS_SIZE);
+	int i;
 
-		glGenTextures(1, &a->tex);
+	if (a->tex == 0 || a->dirty_all) {
+		if (a->tex == 0)
+			glGenTextures(1, &a->tex);
 		glBindTexture(GL_TEXTURE_2D, a->tex);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -159,9 +176,22 @@ GLuint atlas_texture(GlyphAtlas *a)
 		glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_ALPHA8, ATLAS_SIZE, ATLAS_SIZE, 0,
-			     GL_ALPHA, GL_UNSIGNED_BYTE, zero);
-		free(zero);
+			     GL_ALPHA, GL_UNSIGNED_BYTE, a->mirror);
+		a->ndirty = 0;
+		a->dirty_all = 0;
+		return a->tex;
 	}
+	glBindTexture(GL_TEXTURE_2D, a->tex);
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, ATLAS_SIZE);
+	for (i = 0; i < a->ndirty; i++) {
+		int sx = (a->dirty[i] % a->slots_x) * a->slot_w;
+		int sy = (a->dirty[i] / a->slots_x) * a->cell_h;
+		glTexSubImage2D(GL_TEXTURE_2D, 0, sx, sy, a->slot_w, a->cell_h,
+				GL_ALPHA, GL_UNSIGNED_BYTE, a->mirror + (size_t)sy * ATLAS_SIZE + sx);
+	}
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+	a->ndirty = 0;
 	return a->tex;
 }
 
@@ -386,11 +416,17 @@ void atlas_lookup(GlyphAtlas *a, uint32_t cp, int style, int wide, float uv[4])
 		draw_font_glyph(a, cp, style & 3);
 	CGContextFlush(a->ctx);
 
-	glBindTexture(GL_TEXTURE_2D, atlas_texture(a));
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, (slot % a->slots_x) * a->slot_w,
-			(slot / a->slots_x) * a->cell_h, a->slot_w, a->cell_h,
-			GL_ALPHA, GL_UNSIGNED_BYTE, a->bitmap);
+	{
+		int sx = (slot % a->slots_x) * a->slot_w, sy = (slot / a->slots_x) * a->cell_h, r;
+
+		for (r = 0; r < a->cell_h; r++)
+			memcpy(a->mirror + (size_t)(sy + r) * ATLAS_SIZE + sx,
+			       a->bitmap + (size_t)r * a->slot_w, a->slot_w);
+		if (a->ndirty < a->slots_x * a->slots_y)
+			a->dirty[a->ndirty++] = slot;
+		else
+			a->dirty_all = 1;
+	}
 
 	a->table[h].key = key;
 	a->table[h].slot = (uint16_t)slot;

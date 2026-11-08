@@ -29,7 +29,7 @@
 
 - (void)applicationDidFinishLaunching:(NSNotification *)n
 {
-	const char *nw = getenv("PUMATERM_TEST_WINDOWS");	/* test hook */
+	const char *nw = test_env("PUMATERM_TEST_WINDOWS");	/* test hook */
 	int i, count = nw ? atoi(nw) : 1;
 
 	(void)n;
@@ -38,9 +38,9 @@
 		name:TermWindowClosedNotification object:nil];
 	for (i = 0; i < (count > 0 ? count : 1); i++)
 		[self newWindow:nil];
-	if (getenv("PUMATERM_TEST_PREFS"))		/* test hook */
+	if (test_env("PUMATERM_TEST_PREFS"))		/* test hook */
 		[[PrefsWindow shared] showForTest];
-	if (getenv("PUMATERM_TEST_LIVE"))		/* test hook */
+	if (test_env("PUMATERM_TEST_LIVE"))		/* test hook */
 		[self performSelector:@selector(liveChange:) withObject:nil afterDelay:3.0];
 }
 
@@ -50,7 +50,7 @@
 - (void)liveChange:(id)o
 {
 	NSMutableDictionary *d = [NSMutableDictionary dictionaryWithDictionary:
-		prefs_scheme_values([NSString stringWithUTF8String:getenv("PUMATERM_TEST_LIVE")])];
+		prefs_scheme_values([NSString stringWithUTF8String:test_env("PUMATERM_TEST_LIVE")])];
 
 	(void)o;
 	[d setObject:[NSNumber numberWithFloat:16] forKey:kPrefFontSize];
@@ -69,7 +69,7 @@
 	tw = [[TermWindow alloc] initWithCascadeFrom:&cascade];
 	[windows addObject:tw];
 	[tw release];
-	if (getenv("PUMATERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
+	if (test_env("PUMATERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
 		[[tw window] orderBack:nil];
 	else
 		[[tw window] makeKeyAndOrderFront:nil];

@@ -22,6 +22,13 @@ float atlas_descent(const GlyphAtlas *a);
 #define ATLAS_ITALIC	2
 void atlas_lookup(GlyphAtlas *a, uint32_t cp, int style, int wide, float uv[4]);
 
+/* The texture, created on first use and brought up to date with every
+ * glyph rasterised since: needs the GL context current. */
 GLuint atlas_texture(GlyphAtlas *a);
+
+/* The same pixels on the CPU: ATLAS_PIXELS square, one coverage byte each,
+ * row 0 at the top; uv * ATLAS_PIXELS is a pixel position in it. */
+#define ATLAS_PIXELS	2048
+const unsigned char *atlas_mirror(const GlyphAtlas *a);
 
 #endif

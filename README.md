@@ -13,7 +13,7 @@ driver underneath can do; on board 1 it runs on the RadeonNI renderer
 |---|---|
 | `vendor/libvterm` | libvterm 0.3.3 (MIT): VT/xterm parsing, screen, keys, mouse |
 | `src/GlyphAtlas.m` | glyphs rasterized once into a 2048x2048 GL_ALPHA texture via Core Text + CGFont (CTFontDrawGlyphs is 10.7); braille, block elements and box drawing are drawn pixel-exact |
-| `src/TermView.m` | the NSOpenGLView: libvterm callbacks, 10,000-line scrollback, rendering, keyboard/mouse/paste, resize |
+| `src/TermView.m` | the terminal view: libvterm callbacks, scrollback, the quad list and its two drawing paths (a GL child view when opaque, the CPU when translucent), keyboard/mouse/paste, resize |
 | `src/Pty.c` | the login shell on a pseudo-terminal (TERM=xterm-256color, COLORTERM=truecolor) |
 | `src/TermWindow.m` | a window: the tab strip and the selected terminal; unselected tabs stay out of the view tree, shells running |
 | `src/Prefs.m` | the settings: keys, defaults, colour schemes (PumaTerm, Tango Dark, Solarized Dark, Dracula) |
@@ -44,7 +44,17 @@ Preferences (Cmd-,), each applied to open windows at once:
   ANSI colours individually; editing any of them makes the scheme Custom.
 
 Opacity applies to the default background only, so a program's coloured
-cells stay solid, as in iTerm. The blur is CoreGraphics' private window
+cells stay solid, as in iTerm. A translucent terminal is drawn on the CPU,
+not with GL: RadeonNI shows a GL window's new frame by copying the surface
+to the screen (`RadeonNIAccel::flushSurface`), which keeps no alpha, so a
+non-opaque GL surface looked exactly like an opaque one. Both paths draw
+one list of quads (`buildQuads`); the CPU one mixes background and
+foreground by the glyph's coverage as the shader does, into a
+premultiplied buffer drawn into the window's backing store, which the
+window server composites like any translucent window. Measured on board
+1: the window server's own capture of the window has alpha 0.596 at
+Opacity 0.6, and an idle translucent terminal with a blinking cursor uses
+5-8% of a core. `PUMATERM_NO_GL=1` forces the CPU path for comparison. The blur is CoreGraphics' private window
 filter (`CGSAddWindowFilter` with a `CIGaussianBlur`, flags 0x3001), which
 10.5 exports; it is what iTerm used before 10.6.
 
@@ -78,7 +88,7 @@ would take to stdout, so the clipboard is never touched.
 `PUMATERM_TEST_WINDOWS=n` opens n windows at launch, and `PUMATERM_TEST_TABS=n` n tabs
 in each, writing the tab strip to `/tmp/pumaterm-tabs.png`.
 `PUMATERM_TEST_PREFS=1` opens Preferences behind everything and writes each
-page to `/tmp/pumaterm-prefs-N.png`; `PUMATERM_TEST_LIVE=<scheme>` switches to
+page to `/tmp/pumaterm-prefs-N.png`; `PUMATERM_TEST_FOCUS=1` draws as the key window would (the focused cursor, blinking); `PUMATERM_TEST_LIVE=<scheme>` switches to
 that scheme at 16 pt three seconds in, through the argument domain, which is
 never saved. Any setting can be given for one run as an argument
 (`-Opacity 0.75 -CursorShape 2`), likewise never saved.

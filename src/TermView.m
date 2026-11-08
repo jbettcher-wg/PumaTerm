@@ -221,9 +221,13 @@ static GLuint compile(GLenum type, const char *src)
 	return s;
 }
 
-@implementation TermView
+/*
+ * The GL path: a child view that only draws, and only while the terminal
+ * is opaque. Events pass through it to the TermView behind.
+ */
+@implementation TermGLView
 
-- (id)initWithFrame:(NSRect)frame fontName:(NSString *)font size:(float)size
+- (id)initWithFrame:(NSRect)frame terminal:(TermView *)o
 {
 	NSOpenGLPixelFormatAttribute attrs[] = {
 		NSOpenGLPFADoubleBuffer, NSOpenGLPFAAccelerated,
@@ -235,8 +239,36 @@ static GLuint compile(GLenum type, const char *src)
 		NSOpenGLPixelFormatAttribute any[] = { NSOpenGLPFADoubleBuffer, 0 };
 		pf = [[[NSOpenGLPixelFormat alloc] initWithAttributes:any] autorelease];
 	}
-	if ((self = [super initWithFrame:frame pixelFormat:pf]) == nil)
+	if ((self = [super initWithFrame:frame pixelFormat:pf]) != nil)
+		owner = o;
+	return self;
+}
+
+- (BOOL)isOpaque			{ return YES; }
+- (NSView *)hitTest:(NSPoint)p		{ (void)p; return nil; }
+- (void)prepareOpenGL			{ [owner glPrepare]; }
+- (void)drawRect:(NSRect)dirty		{ (void)dirty; [owner glDraw]; }
+
+/* A tab that is not selected is out of the window, and its GL surface must
+ * go with it: left attached, it stays composited over the window and the
+ * selected terminal is drawn underneath it. */
+- (void)viewWillMoveToWindow:(NSWindow *)w
+{
+	if (w == nil)
+		[[self openGLContext] clearDrawable];
+	[super viewWillMoveToWindow:w];
+}
+
+@end
+
+@implementation TermView
+
+- (id)initWithFrame:(NSRect)frame fontName:(NSString *)font size:(float)size
+{
+	if ((self = [super initWithFrame:frame]) == nil)
 		return nil;
+	glView = [[TermGLView alloc] initWithFrame:[self bounds] terminal:self];
+	[glView setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
 	fontName = [font retain];
 	fontSize = size;
@@ -312,12 +344,21 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 	bgAlpha = [u floatForKey:kPrefOpacity];
 	if (bgAlpha < 0.2f) bgAlpha = 0.2f;
 	if (bgAlpha > 1) bgAlpha = 1;
-	{
-		/* The surface composites by its alpha only when it is marked
-		 * non-opaque; an opaque one ignores alpha altogether. */
-		GLint opaque = bgAlpha >= 1;
-		[[self openGLContext] setValues:&opaque forParameter:NSOpenGLCPSurfaceOpacity];
-	}
+	/*
+	 * Opaque terminals draw with GL. A translucent one cannot: RadeonNI
+	 * shows a GL window's new frame by copying the surface to the screen
+	 * (RadeonNIAccel::flushSurface), which no alpha survives, so a
+	 * non-opaque surface looked exactly like an opaque one. Translucent
+	 * terminals therefore draw the same quads on the CPU into the
+	 * window's ordinary backing store, which the window server
+	 * composites with alpha like any other window.
+	 */
+	useGL = bgAlpha >= 1 && test_env("PUMATERM_NO_GL") == NULL;
+	if (useGL && [glView superview] == nil) {
+		[glView setFrame:[self bounds]];
+		[self addSubview:glView];
+	} else if (!useGL && [glView superview] != nil)
+		[glView removeFromSuperview];
 	cursorShape = [u integerForKey:kPrefCursorShape];
 	cursorBlink = [u boolForKey:kPrefCursorBlink];
 	bellMode = [u integerForKey:kPrefBell];
@@ -334,20 +375,23 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 		[fontName release];
 		fontName = [font retain];
 		fontSize = size;
-		[[self openGLContext] makeCurrentContext];
+		[[glView openGLContext] makeCurrentContext];	/* the texture's */
 		atlas_destroy(atlas);
 		atlas = atlas_create([font UTF8String], size);
 		atlas_metrics(atlas, &cellW, &cellH);
-		[self reshape];
+		[self resizeTerminal];
 	}
 	/* Damage everything: cells hold palette indexes and default flags,
 	 * so recolouring needs no change to the screen itself. */
 	[self setNeedsDisplay:YES];
 }
 
+static unsigned blink_ticks, frames_drawn;
+
 - (void)blink:(NSTimer *)t
 {
 	(void)t;
+	blink_ticks++;
 	blinkOn = !blinkOn;
 	[self setNeedsDisplay:YES];
 }
@@ -386,7 +430,16 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 }
 
 - (BOOL)acceptsFirstResponder	{ return YES; }
-- (BOOL)isOpaque		{ return YES; }
+- (BOOL)isOpaque		{ return useGL; }
+
+/* Everything that changes the picture says setNeedsDisplay: to us; the GL
+ * child, when it is the one drawing, has to hear it too. */
+- (void)setNeedsDisplay:(BOOL)flag
+{
+	[super setNeedsDisplay:flag];
+	if (useGL)
+		[glView setNeedsDisplay:flag];
+}
 
 /* KVC targets for the C callbacks. */
 - (void)setCursorPos:(NSValue *)v	{ [v getValue:&cursor]; }
@@ -423,7 +476,7 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 		selector:@selector(pollDump:) userInfo:nil repeats:YES];
 	{
 		/* Test hook: PUMATERM_STARTUP_INPUT is typed into the shell once it is up. */
-		const char *in = getenv("PUMATERM_STARTUP_INPUT");
+		const char *in = test_env("PUMATERM_STARTUP_INPUT");
 		if (in && *in)
 			[self performSelector:@selector(typeStartup:)
 				   withObject:[NSString stringWithUTF8String:in] afterDelay:1.5];
@@ -437,7 +490,7 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 		/* Test hook: PUMATERM_TEST_SELECT="line col line col unit" makes the
 		 * selection a click at the first cell and a drag to the second
 		 * would, and prints what Copy would take, before the frame dump. */
-		const char *sel = getenv("PUMATERM_TEST_SELECT");
+		const char *sel = test_env("PUMATERM_TEST_SELECT");
 		VTermPos a, b, p, q;
 		static int selTested;
 
@@ -558,22 +611,12 @@ static void vcolor(VTermColor *v, const unsigned char c[3])
 
 /* ---- GL -------------------------------------------------------------- */
 
-/* A tab that is not selected is out of the window, and its GL surface must
- * go with it: left attached, it stays composited over the window and the
- * selected terminal is drawn underneath it. */
-- (void)viewWillMoveToWindow:(NSWindow *)w
-{
-	if (w == nil)
-		[[self openGLContext] clearDrawable];
-	[super viewWillMoveToWindow:w];
-}
-
-- (void)prepareOpenGL
+- (void)glPrepare
 {
 	GLuint vs, fs;
 	GLint swap = 1;
 
-	[[self openGLContext] setValues:&swap forParameter:NSOpenGLCPSwapInterval];
+	[[glView openGLContext] setValues:&swap forParameter:NSOpenGLCPSwapInterval];
 	vs = compile(GL_VERTEX_SHADER, vsrc);
 	fs = compile(GL_FRAGMENT_SHADER, fsrc);
 	prog = glCreateProgram();
@@ -611,24 +654,26 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	out[3] = 255;
 }
 
-- (void)drawRect:(NSRect)dirty
+/* Every cell's quad, then line and cursor quads, into verts/fgc/bgc: the
+ * one description of the picture both drawing paths consume. Returns the
+ * vertex count; *clear gets the default background, premultiplied. */
+- (int)buildQuads:(GLubyte *)clear
 {
-	NSRect b = [self bounds];
+	frames_drawn++;
 	/* Per cell: its quad plus up to three line quads (double underline
 	 * and strikethrough). */
 	int r, c, n = 0, need = rows * cols * 4 * 4 + 32;
 	int nl = 0, lineCap = rows * cols * 3 * 4 + 16, thick = cellH >= 28 ? 2 : 1;
-	int focused = [[self window] isKeyWindow];
+	/* PUMATERM_TEST_FOCUS draws as the key window would, so a test copy
+	 * behind the user's windows can show the focused cursor. */
+	int focused = [[self window] isKeyWindow] || test_env("PUMATERM_TEST_FOCUS") != NULL;
 	GLubyte bgA = (GLubyte)lroundf(bgAlpha * 255), curc[4], selc[4];
 	float cx0 = 0, cy0 = 0, cx1 = 0, cy1 = 0;
 	int cursorAt = 0;
 	float *lv;
 	GLubyte *lc;
-	float proj[16] = { 0 };
 	GLubyte defbg[4], deffg[4];
 
-	(void)dirty;
-	[[self openGLContext] makeCurrentContext];
 	if (need > vertCap) {
 		vertCap = need;
 		verts = realloc(verts, sizeof(float) * 4 * need);
@@ -766,10 +811,21 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	memmove(fgc + n * 4, lc, 4 * nl);
 	memcpy(bgc + n * 4, fgc + n * 4, 4 * nl);
 	n += nl;
+	memcpy(clear, defbg, 4);
+	return n;
+}
 
+- (void)glDraw
+{
+	NSRect b = [self bounds];
+	float proj[16] = { 0 };
+	GLubyte clear[4];
+	int n;
+
+	[[glView openGLContext] makeCurrentContext];
+	n = [self buildQuads:clear];
 	glViewport(0, 0, (GLsizei)b.size.width, (GLsizei)b.size.height);
-	glClearColor(defbg[0] / 255.0f * bgAlpha, defbg[1] / 255.0f * bgAlpha,
-		     defbg[2] / 255.0f * bgAlpha, bgAlpha);
+	glClearColor(clear[0] / 255.0f, clear[1] / 255.0f, clear[2] / 255.0f, 1);
 	glClear(GL_COLOR_BUFFER_BIT);
 
 	/* Pixels, y down: (0,0) is the top left of the view. */
@@ -804,18 +860,144 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 		dump_requested = 0;
 		dump_frame((int)b.size.width, (int)b.size.height);
 		dump_window((CGWindowID)[[self window] windowNumber]);
-		printf("dumped: %s\n", [[self title] UTF8String]);
+		printf("dumped (GL): %s blink ticks %u frames %u blinkOn %d\n", [[self title] UTF8String],
+		       blink_ticks, frames_drawn, blinkOn);
 		fflush(stdout);
 	}
-	[[self openGLContext] flushBuffer];
+	[[glView openGLContext] flushBuffer];
 }
 
-- (void)reshape
+/* Premultiplied ARGB in a host-order word, as the bitmap context below
+ * reads it. */
+static uint32_t premul(const GLubyte c[4])
+{
+	unsigned a = c[3];
+
+	return a << 24 | (c[0] * a / 255) << 16 | (c[1] * a / 255) << 8 | (c[2] * a / 255);
+}
+
+static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
+{
+	unsigned na = 255 - a, sh;
+	uint32_t out = 0;
+
+	/* Channel by channel: dividing two packed channels at once lets one
+	 * channel's remainder into the next (measured: colour fringes). */
+	for (sh = 0; sh < 32; sh += 8)
+		out |= ((((bg >> sh) & 0xff) * na + ((fg >> sh) & 0xff) * a + 127) / 255) << sh;
+	return out;
+}
+
+/*
+ * The software path: the same quads, rasterised as the shader would --
+ * each pixel the background and foreground mixed by the glyph's coverage
+ * -- into a premultiplied buffer that is drawn into the window's backing
+ * store. Cells are pixel-aligned and the atlas holds them at 1:1, so a
+ * quad is a rectangle copy with one coverage lookup per pixel.
+ */
+- (void)drawRect:(NSRect)dirty
 {
 	NSRect b = [self bounds];
-	int nc = (int)(b.size.width / cellW), nr = (int)(b.size.height / cellH);
+	int w = (int)b.size.width, h = (int)b.size.height, n, q, x, y;
+	const unsigned char *mir = atlas_mirror(atlas);
+	GLubyte clear[4];
+	uint32_t cl;
+	CGContextRef ctx;
+	CGImageRef img;
 
-	[super reshape];
+	(void)dirty;
+	if (useGL || w <= 0 || h <= 0)
+		return;
+	if (w != cpuW || h != cpuH) {
+		free(cpuPix);
+		cpuPix = malloc((size_t)w * h * 4);
+		cpuW = w;
+		cpuH = h;
+		if (cpuCtx)
+			CGContextRelease(cpuCtx);
+		{
+			CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+			cpuCtx = CGBitmapContextCreate(cpuPix, w, h, 8, (size_t)w * 4, cs,
+				kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Host);
+			CGColorSpaceRelease(cs);
+		}
+	}
+	n = [self buildQuads:clear];
+	cl = premul(clear);
+	for (y = 0; y < w * h; y++)
+		cpuPix[y] = cl;
+	for (q = 0; q < n; q += 4) {
+		const float *v0 = verts + q * 4, *v2 = verts + (q + 2) * 4;
+		int x0 = (int)v0[0], y0 = (int)v0[1], x1 = (int)v2[0], y1 = (int)v2[1];
+		int u0 = (int)lroundf(v0[2] * ATLAS_PIXELS), t0 = (int)lroundf(v0[3] * ATLAS_PIXELS);
+		uint32_t fg = premul(fgc + q * 4), bg = premul(bgc + q * 4);
+		int solid = fg == bg;
+
+		if (x0 < 0) x0 = 0;
+		if (y0 < 0) y0 = 0;
+		if (x1 > w) x1 = w;
+		if (y1 > h) y1 = h;
+		for (y = y0; y < y1; y++) {
+			uint32_t *row = cpuPix + (size_t)y * w;
+			const unsigned char *cov = mir + (size_t)(t0 + y - (int)v0[1]) * ATLAS_PIXELS
+						   + u0 - (int)v0[0];
+			if (solid) {
+				for (x = x0; x < x1; x++)
+					row[x] = fg;
+				continue;
+			}
+			for (x = x0; x < x1; x++) {
+				unsigned a = cov[x];
+				row[x] = a == 0 ? bg : a == 255 ? fg : mix_px(bg, fg, a);
+			}
+		}
+	}
+	img = CGBitmapContextCreateImage(cpuCtx);
+	ctx = [[NSGraphicsContext currentContext] graphicsPort];
+	CGContextSetBlendMode(ctx, kCGBlendModeCopy);
+	CGContextDrawImage(ctx, CGRectMake(0, 0, w, h), img);
+	if (dump_requested) {
+		CFURLRef url = CFURLCreateWithFileSystemPath(NULL, CFSTR("/tmp/pumaterm-frame.png"),
+							     kCFURLPOSIXPathStyle, false);
+		CGImageDestinationRef d = CGImageDestinationCreateWithURL(url, CFSTR("public.png"), 1, NULL);
+
+		dump_requested = 0;
+		if (d) {
+			CGImageDestinationAddImage(d, img, NULL);
+			CGImageDestinationFinalize(d);
+			CFRelease(d);
+		}
+		CFRelease(url);
+		/* the backing store reaches the screen after this returns */
+		[self performSelector:@selector(dumpWindowLater) withObject:nil afterDelay:0.3];
+		printf("dumped (CPU): %s blink ticks %u frames %u blinkOn %d\n", [[self title] UTF8String],
+		       blink_ticks, frames_drawn, blinkOn);
+		fflush(stdout);
+	}
+	CGImageRelease(img);
+}
+
+- (void)dumpWindowLater
+{
+	dump_window((CGWindowID)[[self window] windowNumber]);
+}
+
+- (void)setFrameSize:(NSSize)size
+{
+	[super setFrameSize:size];
+	[self resizeTerminal];
+}
+
+- (void)resizeTerminal
+{
+	NSRect b = [self bounds];
+	int nc, nr;
+
+	if (vt == NULL || cellW <= 0 || cellH <= 0)	/* NSView's init sizes us first */
+		return;
+	nc = (int)(b.size.width / cellW);
+	nr = (int)(b.size.height / cellH);
+
 	if (nc < 2) nc = 2;
 	if (nr < 2) nr = 2;
 	if (nc != cols || nr != rows) {
@@ -1180,6 +1362,10 @@ static void put_utf8(NSMutableData *d, uint32_t ch)
 	free(verts);
 	free(fgc);
 	free(bgc);
+	free(cpuPix);
+	if (cpuCtx)
+		CGContextRelease(cpuCtx);
+	[glView release];
 	[fontName release];
 	[title release];
 	[super dealloc];

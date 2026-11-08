@@ -164,7 +164,7 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 	{
 		/* Test hook: PUMATERM_TEST_TABS=n opens n tabs and, a few seconds
 		 * on, writes the strip to /tmp/pumaterm-tabs.png. */
-		const char *nt = getenv("PUMATERM_TEST_TABS");
+		const char *nt = test_env("PUMATERM_TEST_TABS");
 		int i;
 		for (i = 1; nt && i < atoi(nt); i++)
 			[self newTab:nil];
