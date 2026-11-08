@@ -35,6 +35,9 @@ static int pos_cmp(VTermPos a, VTermPos b)
 	return a.row != b.row ? a.row - b.row : a.col - b.col;
 }
 
+NSString *const TermShellExitedNotification = @"TermShellExited";
+NSString *const TermTitleChangedNotification = @"TermTitleChanged";
+
 static volatile sig_atomic_t dump_requested;
 static void on_usr1(int sig) { (void)sig; dump_requested = 1; }
 
@@ -251,7 +254,15 @@ static GLuint compile(GLenum type, const char *src)
 - (void)setCursorPos:(NSValue *)v	{ [v getValue:&cursor]; }
 - (void)setCursorShown:(NSNumber *)n	{ cursorVisible = [n boolValue]; }
 - (void)setMouseReporting:(NSNumber *)n	{ mouseMode = [n intValue]; }
-- (void)setTitle:(NSString *)t		{ [[self window] setTitle:t]; }
+- (NSString *)title			{ return title ? title : @"term"; }
+
+- (void)setTitle:(NSString *)t
+{
+	[title release];
+	title = [t copy];
+	[[NSNotificationCenter defaultCenter]
+		postNotificationName:TermTitleChangedNotification object:self];
+}
 
 - (void)startShell
 {
@@ -320,7 +331,12 @@ static GLuint compile(GLenum type, const char *src)
 	if ([d length] == 0) {			/* the shell exited */
 		int status;
 		waitpid(child, &status, WNOHANG);
-		[[self window] close];
+		child = 0;
+		/* The observer closes this tab and releases us: last until the
+		 * method returns. */
+		[[self retain] autorelease];
+		[[NSNotificationCenter defaultCenter]
+			postNotificationName:TermShellExitedNotification object:self];
 		return;
 	}
 	vterm_input_write(vt, [d bytes], [d length]);
@@ -400,6 +416,16 @@ static GLuint compile(GLenum type, const char *src)
 }
 
 /* ---- GL -------------------------------------------------------------- */
+
+/* A tab that is not selected is out of the window, and its GL surface must
+ * go with it: left attached, it stays composited over the window and the
+ * selected terminal is drawn underneath it. */
+- (void)viewWillMoveToWindow:(NSWindow *)w
+{
+	if (w == nil)
+		[[self openGLContext] clearDrawable];
+	[super viewWillMoveToWindow:w];
+}
 
 - (void)prepareOpenGL
 {
@@ -580,6 +606,8 @@ static void rgb_of(VTermScreen *s, VTermColor c, GLubyte *out)
 	if (dump_requested) {
 		dump_requested = 0;
 		dump_frame((int)b.size.width, (int)b.size.height);
+		printf("dumped: %s\n", [[self title] UTF8String]);
+		fflush(stdout);
 	}
 	[[self openGLContext] flushBuffer];
 }
@@ -953,6 +981,7 @@ static void put_utf8(NSMutableData *d, uint32_t ch)
 	free(fgc);
 	free(bgc);
 	[fontName release];
+	[title release];
 	[super dealloc];
 }
 

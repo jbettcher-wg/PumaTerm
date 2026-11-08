@@ -1,19 +1,18 @@
 /*
- * main.m -- the application: a menu bar and windows each holding a TermView.
+ * main.m -- the application: a menu bar and its TermWindows.
  *
  * No nib: everything is built here so the bundle is just the binary and its
- * Info.plist. A window closes when its shell exits, and the app quits when
- * the last one closes.
+ * Info.plist. A tab closes when its shell exits, a window with its last
+ * tab, and the app with its last window.
  */
 #import <Cocoa/Cocoa.h>
 #import "TermView.h"
+#import "TermWindow.h"
 #include <stdlib.h>
 
-#define DEFAULT_COLS	100
-#define DEFAULT_ROWS	32
-
 @interface TermApp : NSObject {
-	NSPoint	cascade;
+	NSMutableArray	*windows;		/* TermWindow controllers */
+	NSPoint		 cascade;
 }
 - (void)newWindow:(id)sender;
 @end
@@ -32,6 +31,9 @@
 	int i, count = nw ? atoi(nw) : 1;
 
 	(void)n;
+	windows = [[NSMutableArray alloc] init];
+	[[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(windowClosed:)
+		name:TermWindowClosedNotification object:nil];
 	for (i = 0; i < (count > 0 ? count : 1); i++)
 		[self newWindow:nil];
 }
@@ -54,44 +56,23 @@ static NSString *chosen_font(float size)
 - (void)newWindow:(id)sender
 {
 	float size = [[NSUserDefaults standardUserDefaults] floatForKey:@"FontSize"];
-	NSString *font;
-	TermView *probe, *view;
-	NSSize cell;
-	NSRect frame;
-	NSWindow *w;
-	BOOL first = NSEqualPoints(cascade, NSZeroPoint);
+	TermWindow *tw;
 
 	(void)sender;
 	if (size <= 0)
 		size = 12;
-	font = chosen_font(size);
-
-	/* Size the window to whole cells, then give the terminal that frame. */
-	probe = [[TermView alloc] initWithFrame:NSMakeRect(0, 0, 100, 100) fontName:font size:size];
-	cell = [probe cellSize];
-	[probe release];
-	frame = NSMakeRect(0, 0, cell.width * DEFAULT_COLS, cell.height * DEFAULT_ROWS);
-
-	w = [[NSWindow alloc] initWithContentRect:frame
-		styleMask:NSTitledWindowMask | NSClosableWindowMask |
-			  NSMiniaturizableWindowMask | NSResizableWindowMask
-		backing:NSBackingStoreBuffered defer:NO];
-	[w setContentResizeIncrements:cell];
-	[w setTitle:@"term"];
-	view = [[TermView alloc] initWithFrame:frame fontName:font size:size];
-	[w setContentView:view];
-	[w makeFirstResponder:view];
-	/* The first window is centred; each later one steps down and right
-	 * from the one before. A zero point leaves a window where it is. */
-	if (first)
-		[w center];
-	cascade = [w cascadeTopLeftFromPoint:cascade];
+	tw = [[TermWindow alloc] initWithFont:chosen_font(size) size:size cascadeFrom:&cascade];
+	[windows addObject:tw];
+	[tw release];
 	if (getenv("TERM_STARTUP_INPUT"))	/* a test launch: stay out of the way */
-		[w orderBack:nil];
+		[[tw window] orderBack:nil];
 	else
-		[w makeKeyAndOrderFront:nil];
-	[view startShell];
-	[view release];
+		[[tw window] makeKeyAndOrderFront:nil];
+}
+
+- (void)windowClosed:(NSNotification *)n
+{
+	[windows removeObject:[n object]];
 }
 
 @end
@@ -109,10 +90,16 @@ static NSMenu *build_menu(void)
 	[app addItem:[NSMenuItem separatorItem]];
 	[app addItemWithTitle:@"Quit term" action:@selector(terminate:) keyEquivalent:@"q"];
 	[shell addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@"n"];
-	[shell addItemWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"w"];
+	[shell addItemWithTitle:@"New Tab" action:@selector(newTab:) keyEquivalent:@"t"];
+	[shell addItem:[NSMenuItem separatorItem]];
+	[shell addItemWithTitle:@"Close Tab" action:@selector(closeTab:) keyEquivalent:@"w"];
+	[shell addItemWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"W"];
 	[edit addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
 	[edit addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
 	[win addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+	[win addItem:[NSMenuItem separatorItem]];
+	[win addItemWithTitle:@"Select Next Tab" action:@selector(selectNextTab:) keyEquivalent:@"}"];
+	[win addItemWithTitle:@"Select Previous Tab" action:@selector(selectPreviousTab:) keyEquivalent:@"{"];
 
 	i = [bar addItemWithTitle:@"term" action:NULL keyEquivalent:@""];
 	[bar setSubmenu:app forItem:i];

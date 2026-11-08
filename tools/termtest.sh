@@ -10,7 +10,7 @@ cd /Applications && rm -rf Term.app && tar xzf /tmp/Term.app.tgz 2>/dev/null && 
 rm -f /tmp/term-frame.png
 FINDER=$(ps -axo pid=,user=,comm= | awk '$2=="jbettcher" && $3 ~ /Finder$/ {print $1}' | head -1)
 INPUT=$(cat /tmp/termtest.input)
-launchctl bsexec "$FINDER" sudo -u jbettcher -H env TERM_STARTUP_INPUT="$INPUT" TERM_TEST_SELECT="$TERM_TEST_SELECT" TERM_TEST_WINDOWS="$TERM_TEST_WINDOWS" \
+launchctl bsexec "$FINDER" sudo -u jbettcher -H env TERM_STARTUP_INPUT="$INPUT" TERM_TEST_SELECT="$TERM_TEST_SELECT" TERM_TEST_WINDOWS="$TERM_TEST_WINDOWS" TERM_TEST_TABS="$TERM_TEST_TABS" \
 	/Applications/Term.app/Contents/MacOS/term $TERM_ARGS > /tmp/term.out 2>&1 &
 sleep ${WAIT:-6}
 P=$(termpids | head -1)

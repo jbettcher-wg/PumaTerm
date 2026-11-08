@@ -15,14 +15,19 @@ driver underneath can do; on board 1 it runs on the RadeonNI renderer
 | `src/GlyphAtlas.m` | glyphs rasterized once into a 2048x2048 GL_ALPHA texture via Core Text + CGFont (CTFontDrawGlyphs is 10.7); braille, block elements and box drawing are drawn pixel-exact |
 | `src/TermView.m` | the NSOpenGLView: libvterm callbacks, 10,000-line scrollback, rendering, keyboard/mouse/paste, resize |
 | `src/Pty.c` | the login shell on a pseudo-terminal (TERM=xterm-256color, COLORTERM=truecolor) |
-| `src/main.m` | the app: menu bar and one window, no nib |
+| `src/TermWindow.m` | a window: the tab strip and the selected terminal; unselected tabs stay out of the view tree, shells running |
+| `src/main.m` | the app: menu bar and windows, no nib |
 
 Build natively on a board (Apple's gcc-4.2: Objective-C and the 10.5 SDK):
 
     make            # -> build/Term.app
     cp -R build/Term.app /Applications/
 
-Cmd-N opens another window (each its own shell and pty), cascaded.
+Cmd-N opens another window, Cmd-T another tab (each tab its own shell and
+pty); Cmd-W closes a tab, Shift-Cmd-W the window, Shift-Cmd-[ and ] move
+between tabs, and a tab is labelled with the title its program sets (OSC 0/2).
+The tab strip appears with the second tab, and the window grows by its
+height so the terminal keeps its rows.
 
 Defaults: `defaults write org.xnu-t4240.term Font Monaco`, `FontSize 12`.
 With no `Font` set, or one that is not installed, Term takes Hack Nerd Font
@@ -51,12 +56,13 @@ window behind the others; `kill -USR1 <pid>` writes the next frame to
 `/tmp/term-frame.png`; `TERM_TEST_SELECT="line col line col unit"` (unit 1
 cell, 2 word, 3 line) makes that selection at the dump and prints what Copy
 would take to stdout, so the clipboard is never touched.
-`TERM_TEST_WINDOWS=n` opens n windows at launch.
-`proving-ground/board/termtest.sh` drives all four, and passes `TERM_ARGS`
+`TERM_TEST_WINDOWS=n` opens n windows at launch, and `TERM_TEST_TABS=n` n tabs
+in each, writing the tab strip to `/tmp/term-tabs.png`.
+`proving-ground/board/termtest.sh` drives them all, and passes `TERM_ARGS`
 (e.g. `-Font HackNFM-Regular`) through.
 
 Measured on board 1, 2026-11-08: btop 1.4.8 draws all panels, 24 CPU
 threads, truecolor theme, braille meters and box-drawn frames.
 
-Not yet: tabs, combining characters drawn over their base,
+Not yet: combining characters drawn over their base,
 colour emoji, a preferences window.

@@ -4,6 +4,11 @@
 #include "vterm.h"
 #include "GlyphAtlas.h"
 
+/* Posted with the view as object: its shell exited (the view's window
+ * controller closes the tab), or the program set a new title. */
+extern NSString *const TermShellExitedNotification;
+extern NSString *const TermTitleChangedNotification;
+
 typedef struct {
 	int		cols;
 	VTermScreenCell *cells;
@@ -17,6 +22,7 @@ typedef struct {
 	VTermScreen	*screen;
 	GlyphAtlas	*atlas;
 	NSString	*fontName;
+	NSString	*title;			/* as the program set it (OSC 0/2) */
 	float		 fontSize;
 	int		 rows, cols, cellW, cellH;
 	int		 masterFd;
@@ -48,6 +54,7 @@ typedef struct {
 - (id)initWithFrame:(NSRect)frame fontName:(NSString *)font size:(float)size;
 - (NSSize)cellSize;
 - (void)startShell;
+- (NSString *)title;
 - (NSString *)selectionText;
 - (void)copy:(id)sender;
 @end
