@@ -1490,6 +1490,9 @@ static void put_utf8(NSMutableData *d, uint32_t ch)
 		kill(child, SIGHUP);
 	[ptyHandle release];
 	vterm_free(vt);
+	/* GL names are per context: delete this tab's texture in its own
+	 * context, not in whichever another tab left current. */
+	[[glView openGLContext] makeCurrentContext];
 	atlas_destroy(atlas);
 	for (i = 0; i < sbSize; i++)
 		free(sb[i].cells);

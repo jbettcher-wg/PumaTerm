@@ -140,7 +140,8 @@ window behind the others; `kill -USR1 <pid>` writes the next frame to
 which is what shows translucency); `PUMATERM_TEST_SELECT="line col line col unit"` (unit 1
 cell, 2 word, 3 line) makes that selection at the dump and prints what Copy
 would take to stdout, so the clipboard is never touched.
-`PUMATERM_TEST_WINDOWS=n` opens n windows at launch, and `PUMATERM_TEST_TABS=n` n tabs
+`PUMATERM_TEST_WINDOWS=n` opens n windows at launch, `PUMATERM_TEST_CLOSE=1` closes the
+selected tab three seconds in and reports what is left, and `PUMATERM_TEST_TABS=n` n tabs
 in each, writing the tab strip to `/tmp/pumaterm-tabs.png`.
 `PUMATERM_TEST_PREFS=1` opens Preferences behind everything and writes each
 page to `/tmp/pumaterm-prefs-N.png`; `PUMATERM_TEST_FOCUS=1` draws as the key window would (the focused cursor, blinking); `PUMATERM_TEST_LIVE=<scheme>` switches to

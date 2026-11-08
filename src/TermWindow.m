@@ -11,6 +11,7 @@
 #import "TermWindow.h"
 #import "TermView.h"
 #import "Prefs.h"
+#include <stdio.h>
 #include <stdlib.h>
 
 /*
@@ -170,6 +171,10 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 			[self newTab:nil];
 		if (nt)
 			[self performSelector:@selector(dumpBar) withObject:nil afterDelay:5.0];
+		/* PUMATERM_TEST_CLOSE=1: close the selected tab three seconds in,
+		 * then report what the window holds. */
+		if (test_env("PUMATERM_TEST_CLOSE"))
+			[self performSelector:@selector(testClose) withObject:nil afterDelay:3.0];
 	}
 	return self;
 }
@@ -181,6 +186,17 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 	[bar cacheDisplayInRect:[bar bounds] toBitmapImageRep:rep];
 	[[rep representationUsingType:NSPNGFileType properties:nil]
 		writeToFile:@"/tmp/pumaterm-tabs.png" atomically:NO];
+}
+
+- (void)testClose
+{
+	printf("close: %d tabs, selected %d\n", (int)[views count], active);
+	[self closeTab:nil];
+	printf("after: %d tabs, selected %d, in window %d, strip shown %d\n",
+	       (int)[views count], active,
+	       [views count] ? [[views objectAtIndex:active] superview] == container : -1,
+	       [bar superview] != nil);
+	fflush(stdout);
 }
 
 - (NSWindow *)window	{ return window; }
@@ -264,7 +280,7 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 		b.size.height -= BAR_H;
 	} else if ([bar superview] != nil)
 		[bar removeFromSuperview];
-	if ([views count])
+	if (active >= 0 && active < (int)[views count])
 		[[views objectAtIndex:active] setFrame:b];
 	[bar setNeedsDisplay:YES];
 }
@@ -336,12 +352,18 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 		[window close];
 		return;
 	}
-	if ([views count] == 1)
-		[self fitBar:NO];
+	/* Fix the selection before anything resizes: shrinking the window
+	 * for the strip runs -layout, which indexes views by it. Doing it the
+	 * other way round, closing the selected last tab of two indexed past
+	 * the end, the exception abandoned the close, and the window was
+	 * left with no terminal in it (reported by the user: "I just had a
+	 * title bar"). */
 	if (active > i || active >= (int)[views count])
 		active--;
 	if (active < 0)
 		active = 0;
+	if ([views count] == 1)
+		[self fitBar:NO];
 	[self selectTabAtIndex:active];
 }
 
