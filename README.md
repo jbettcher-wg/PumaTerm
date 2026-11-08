@@ -93,7 +93,14 @@ T4240: the window server's own capture of the window has alpha 0.596 at
 Opacity 0.6, and an idle translucent terminal with a blinking cursor uses
 5-8% of a core. `PUMATERM_NO_GL=1` forces the CPU path for comparison. The blur is CoreGraphics' private window
 filter (`CGSAddWindowFilter` with a `CIGaussianBlur`, flags 0x3001), which
-10.5 exports; it is what iTerm used before 10.6.
+10.5 exports; it is what iTerm used before 10.6, and the Dock's call for
+Dashboard's ripple. It needs the window server's Core Image to be given the
+screen behind the window. On the T4240's RadeonNI driver it is not yet: the
+window server accepts the filter (all three calls return 0, measured
+2026-11-08), but the driver hands it the window's own backing store as the
+backdrop (RadeonNI known issue 23, the same bug as its noisy translucent
+menu bar), so nothing behind the window is blurred. On a driver that
+supplies the backdrop it needs no change here.
 
 Every setting is a key in `io.github.jbettcher-wg.PumaTerm` (see `src/Prefs.h`), so
 `defaults write io.github.jbettcher-wg.PumaTerm Opacity 0.85` works too. Out of

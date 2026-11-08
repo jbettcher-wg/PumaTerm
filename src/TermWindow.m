@@ -220,11 +220,18 @@ NSString *const TermWindowClosedNotification = @"TermWindowClosed";
 	if (blur) {
 		NSDictionary *d = [NSDictionary dictionaryWithObject:
 			[NSNumber numberWithFloat:[u floatForKey:kPrefBlurRadius]] forKey:@"inputRadius"];
-		if (blurFilter == NULL &&
-		    CGSNewCIFilterByName(cid, CFSTR("CIGaussianBlur"), &blurFilter) == 0)
-			CGSAddWindowFilter(cid, (int)[window windowNumber], blurFilter, 0x3001);
+		CGError e1 = 0, e2 = 0, e3 = 0;
+
+		if (blurFilter == NULL) {
+			e1 = CGSNewCIFilterByName(cid, CFSTR("CIGaussianBlur"), &blurFilter);
+			if (e1 == 0)
+				e2 = CGSAddWindowFilter(cid, (int)[window windowNumber], blurFilter, 0x3001);
+		}
 		if (blurFilter)
-			CGSSetCIFilterValuesFromDictionary(cid, blurFilter, (CFDictionaryRef)d);
+			e3 = CGSSetCIFilterValuesFromDictionary(cid, blurFilter, (CFDictionaryRef)d);
+		if (e1 || e2 || e3 || test_env("PUMATERM_TEST_BLUR"))
+			NSLog(@"pumaterm: blur: connection %d window %d filter %p: new %d, add %d, values %d",
+			      cid, (int)[window windowNumber], blurFilter, e1, e2, e3);
 	}
 	[window invalidateShadow];
 }
