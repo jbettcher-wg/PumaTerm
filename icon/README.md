@@ -1,7 +1,7 @@
 # PumaTerm's icon
 
 Original artwork for this project (`PumaTerm.svg`, paths only, no fonts):
-an aluminium frame round a dark glass screen with a lit prompt and cursor,
+an aluminium frame round a dark glass screen with a blue prompt and a green cursor,
 in Leopard's idiom.
 
 `PumaTerm.icns` is built from it, and is committed so a build on a board
