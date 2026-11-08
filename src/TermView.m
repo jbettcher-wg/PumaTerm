@@ -17,7 +17,7 @@
 #include <OpenGL/gl.h>
 #include <ApplicationServices/ApplicationServices.h>
 #include <ctype.h>
-#include <poll.h>
+#include <sys/select.h>
 #include <signal.h>
 #include <sys/time.h>
 #include <stdio.h>
@@ -116,19 +116,29 @@ static void dump_frame(int w, int h)
 
 /* ---- libvterm callbacks ---------------------------------------------- */
 
+/* Input-side counters for the test dump (SIGUSR1). */
+static unsigned in_notes, in_extra;
+static double in_bytes, in_us;
+
 static int cb_damage(VTermRect r, void *user)
 {
 	[(TermView *)user damageRows:r.start_row to:r.end_row - 1];
 	return 1;
 }
 
+/*
+ * libvterm reports every cursor move, which is every character printed: a
+ * full-screen visualizer frame is thousands of them.  This was a KVC
+ * setValue:forKey: with a fresh NSValue and two window invalidations each,
+ * and held a 100x32 truecolor animation to 0.6 frames a second (measured on
+ * board 1, 2026-11-08).  It is now a plain store and a widening of the
+ * pending row range.
+ */
 static int cb_movecursor(VTermPos pos, VTermPos old, int visible, void *user)
 {
 	TermView *v = user;
 	(void)visible;
-	[v setValue:[NSValue valueWithBytes:&pos objCType:@encode(VTermPos)] forKey:@"cursorPos"];
-	[v damageRows:old.row to:old.row];
-	[v damageRows:pos.row to:pos.row];
+	[v moveCursorTo:pos from:old];
 	return 1;
 }
 
@@ -469,6 +479,10 @@ static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 		if (a < dirtyR0) dirtyR0 = a;
 		if (b > dirtyR1) dirtyR1 = b;
 	}
+	if (inInput) {				/* ptyData invalidates once at its end */
+		invalPending = YES;
+		return;
+	}
 	if (useGL) {
 		[glView setNeedsDisplay:YES];
 		return;
@@ -483,6 +497,35 @@ static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 
 /* KVC targets for the C callbacks. */
 - (void)setCursorPos:(NSValue *)v	{ [v getValue:&cursor]; }
+
+- (void)moveCursorTo:(VTermPos)pos from:(VTermPos)old
+{
+	cursor = pos;
+	[self damageRows:(old.row < pos.row ? old.row : pos.row)
+		      to:(old.row > pos.row ? old.row : pos.row)];
+}
+
+/* The one invalidation for everything damaged while input was processed. */
+- (void)flushInvalidation
+{
+	NSRect bd = [self bounds];
+	int a = dirtyR0, b = dirtyR1;
+
+	if (!invalPending)
+		return;
+	invalPending = NO;
+	if (b < a)
+		return;
+	if (useGL) {
+		[glView setNeedsDisplay:YES];
+		return;
+	}
+	{
+		float top = bd.size.height - a * cellH;
+		float bot = b == rows - 1 ? 0 : bd.size.height - (b + 1) * cellH;
+		[super setNeedsDisplayInRect:NSMakeRect(0, bot, bd.size.width, top - bot)];
+	}
+}
 - (void)setCursorShown:(NSNumber *)n	{ cursorVisible = [n boolValue]; }
 - (void)setMouseReporting:(NSNumber *)n	{ mouseMode = [n intValue]; }
 - (NSString *)title			{ return title ? title : @"PumaTerm"; }
@@ -587,7 +630,16 @@ static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 		scrollOffset = 0;
 		[self setNeedsDisplay:YES];
 	}
-	vterm_input_write(vt, [d bytes], [d length]);
+	inInput = YES;
+	{
+		struct timeval i0, i1;
+		gettimeofday(&i0, NULL);
+		vterm_input_write(vt, [d bytes], [d length]);
+		gettimeofday(&i1, NULL);
+		in_us += (i1.tv_sec - i0.tv_sec) * 1e6 + (i1.tv_usec - i0.tv_usec);
+		in_notes++;
+		in_bytes += [d length];
+	}
 	{
 		/*
 		 * A program's screen update often arrives in several reads
@@ -601,20 +653,32 @@ static double cpu_us, cpu_rows, cpu_build_us, cpu_raster_us;
 		struct timeval t0, t;
 		gettimeofday(&t0, NULL);
 		for (;;) {
-			struct pollfd p = { masterFd, POLLIN, 0 };
+			/* select, not poll: 10.5's poll() does not support
+			 * terminal devices (POLLNVAL), so this loop never read
+			 * anything and every ~500-byte pty read cost a whole
+			 * run-loop pass with a draw (measured: 0 extra reads,
+			 * 0.6 frames a second of a 100x32 animation). */
+			fd_set rf;
+			struct timeval tmo = { 0, 1000 };
 			ssize_t got;
-			if (poll(&p, 1, 1) <= 0 || !(p.revents & POLLIN))
+			FD_ZERO(&rf);
+			FD_SET(masterFd, &rf);
+			if (select(masterFd + 1, &rf, NULL, NULL, &tmo) <= 0)
 				break;
 			got = read(masterFd, buf, sizeof buf);
 			if (got <= 0)
 				break;		/* EOF: the background read reports it */
 			vterm_input_write(vt, buf, (size_t)got);
+			in_extra++;
+			in_bytes += got;
 			gettimeofday(&t, NULL);
 			if ((t.tv_sec - t0.tv_sec) * 1000000 + (t.tv_usec - t0.tv_usec) > 8000)
 				break;
 		}
 	}
 	vterm_screen_flush_damage(screen);
+	inInput = NO;
+	[self flushInvalidation];
 	[ptyHandle readInBackgroundAndNotify];
 }
 
@@ -1102,6 +1166,8 @@ static uint32_t mix_px(uint32_t bg, uint32_t fg, unsigned a)
 		CFRelease(url);
 		/* the backing store reaches the screen after this returns */
 		[self performSelector:@selector(dumpWindowLater) withObject:nil afterDelay:0.3];
+		printf("input: %u notifications + %u extra reads, %.0f bytes, %.0f us in vterm (%.0f bytes per notification)\n",
+		       in_notes, in_extra, in_bytes, in_us, in_notes ? in_bytes / in_notes : 0);
 		printf("dumped (CPU): %s blink ticks %u frames %u blinkOn %d; cpu frames %u, %.0f us (build %.0f, to raster end %.0f) and %.1f rows each\n",
 		       [[self title] UTF8String], blink_ticks, frames_drawn, blinkOn,
 		       cpu_frames, cpu_frames ? cpu_us / cpu_frames : 0,

@@ -34,6 +34,8 @@ typedef struct {
 	CGContextRef	 cpuCtx;
 	int		 lastW, lastH;
 	int		 dirtyR0, dirtyR1;	/* changed live rows; none if R1 < R0 */
+	BOOL		 inInput;		/* inside ptyData: invalidate once at its end */
+	BOOL		 invalPending;		/* rows were damaged during input */
 	BOOL		 dirtyAll;
 	VTerm		*vt;
 	VTermScreen	*screen;
@@ -89,6 +91,8 @@ typedef struct {
 - (void)glDraw;
 - (void)resizeTerminal;
 - (void)damageRows:(int)a to:(int)b;
+- (void)moveCursorTo:(VTermPos)pos from:(VTermPos)old;
+- (void)flushInvalidation;
 - (NSString *)selectionText;
 - (void)copy:(id)sender;
 @end
