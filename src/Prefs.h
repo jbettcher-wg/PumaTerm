@@ -5,7 +5,7 @@
 /* Posted when any setting changes; open windows re-read what they use. */
 extern NSString *const PrefsChangedNotification;
 
-/* Keys in the org.xnu-t4240.pumaterm defaults domain. Colours are stored
+/* Keys in the io.github.jbettcher-wg.PumaTerm defaults domain. Colours are stored
  * as "#rrggbb" strings so `defaults read` stays legible. */
 #define kPrefFont		@"Font"		/* PostScript name */
 #define kPrefFontSize		@"FontSize"

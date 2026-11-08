@@ -86,24 +86,48 @@ Opacity 0.6, and an idle translucent terminal with a blinking cursor uses
 filter (`CGSAddWindowFilter` with a `CIGaussianBlur`, flags 0x3001), which
 10.5 exports; it is what iTerm used before 10.6.
 
-Every setting is a key in `org.xnu-t4240.pumaterm` (see `src/Prefs.h`), so
-`defaults write org.xnu-t4240.pumaterm Opacity 0.85` works too. `Font` is the
-**PostScript** name, not the file or family name, and an unknown one falls
-back to Hack Nerd Font Mono if installed, else Monaco.
+Every setting is a key in `io.github.jbettcher-wg.PumaTerm` (see `src/Prefs.h`), so
+`defaults write io.github.jbettcher-wg.PumaTerm Opacity 0.85` works too. Out of
+the box it is the PumaTerm colour scheme at 75% opacity; drag the opacity
+to 100% for a solid window drawn with GL.
 
-Nerd Fonts work on 10.5 as they ship. Measured on the T4240 with Hack Nerd Font
-Mono v3.4.0 (`HackNerdFontMono-*.ttf` into `/Library/Fonts`, then
-`Font HackNFM-Regular`): powerline (U+E0B0), devicons (U+E711) and the
-Material Design set in plane 15 (U+F0001), so Leopard reads the font's
-format 12 cmap and the surrogate path here reaches it. Use the *Mono*
-variant: its icons are one cell wide, as a cell grid needs. A family's own
-bold and italic faces are used when Core Text finds them; Monaco, which
-has neither, gets a stroked bold and a sheared italic.
-Shift-PageUp/PageDown and the scroll wheel scroll back; Cmd-V pastes
-(bracketed); Option is Meta. Drag selects, double-click takes a word (path
-and URL punctuation included), triple-click a line; Shift selects even when
-a program has the mouse (btop, vim with mouse=a). Cmd-C copies, with lines
-the terminal wrapped joined back into one.
+## Fonts
+
+PumaTerm takes the font set in Preferences, then **Hack Nerd Font Mono** if
+it is installed, then Monaco, which every Mac has. Monaco works, but has no
+bold or italic faces (PumaTerm fakes them) and none of the icons modern
+prompts and status bars draw.
+
+Recommended, all free, all with the icons included:
+
+| Font | Get it | Preferences name |
+|---|---|---|
+| Hack Nerd Font Mono (the default when installed) | [nerdfonts.com](https://www.nerdfonts.com/font-downloads), "Hack" | `HackNFM-Regular` |
+| JetBrainsMono Nerd Font Mono | same page, "JetBrainsMono" | `JetBrainsMonoNFM-Regular` |
+| FiraCode Nerd Font Mono | same page, "FiraCode" | `FiraCodeNFM-Reg` |
+| Menlo-alike: MesloLGS Nerd Font Mono | same page, "Meslo" | `MesloLGSNFM-Regular` |
+
+Take the **Mono** variant of a Nerd Font: its icons are one cell wide, as a
+terminal's grid needs, where the other variants draw them wider and they
+overlap the next character. Use the `.ttf` files; Leopard reads TrueType
+and OpenType, and reads the icons beyond the Basic Multilingual Plane
+(Material Design, U+F0000 and up) too.
+
+To install on 10.5:
+
+1. Download the font's archive on any machine and unpack it (`.tar.xz`
+   needs `xz`, from MacPorts on 10.5, or unpack it elsewhere and copy the
+   `.ttf` files over).
+2. Copy the `*NerdFontMono-*.ttf` files (Regular, Bold, Italic, BoldItalic)
+   into `~/Library/Fonts` for yourself, or `/Library/Fonts` for every user.
+   Double-clicking one opens Font Book, whose Install button does the same.
+3. Quit and reopen PumaTerm, then pick the font in Preferences, Appearance,
+   Change. To set it by hand, use the PostScript name from the table:
+   `defaults write io.github.jbettcher-wg.PumaTerm Font HackNFM-Regular`.
+
+`Font` is the **PostScript** name, not the file or family name; Font Book
+shows it under Preview, Show Font Info. An unknown name falls back to Hack
+Nerd Font Mono or Monaco rather than to a proportional face.
 
 ## Testing without a screen
 

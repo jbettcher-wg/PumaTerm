@@ -2,7 +2,7 @@
  * Prefs.m -- PumaTerm's settings: the keys, their defaults, colour schemes.
  *
  * Everything lives in NSUserDefaults, so `defaults write
- * org.xnu-t4240.pumaterm Key value` and the Preferences window are two
+ * io.github.jbettcher-wg.PumaTerm Key value` and the Preferences window are two
  * views of the same thing.
  */
 #import "Prefs.h"
@@ -43,6 +43,25 @@ static NSArray *palette_of(const struct scheme *s)
 	return a;
 }
 
+/* PumaTerm's settings lived under org.xnu-t4240.pumaterm while it was
+ * part of that project. The first launch under the current identifier
+ * copies them across if there is nothing here yet; the old domain is left
+ * as it was. */
+static void prefs_migrate(void)
+{
+	NSUserDefaults *u = [NSUserDefaults standardUserDefaults];
+	NSString *mine = [[NSBundle mainBundle] bundleIdentifier];
+	NSDictionary *old;
+
+	if (mine == nil || [u persistentDomainForName:mine] != nil)
+		return;
+	old = [u persistentDomainForName:@"org.xnu-t4240.pumaterm"];
+	if (old != nil) {
+		[u setPersistentDomain:old forName:mine];
+		[u synchronize];
+	}
+}
+
 void prefs_register(void)
 {
 	const struct scheme *s = &schemes[0];
@@ -54,7 +73,7 @@ void prefs_register(void)
 		[NSString stringWithUTF8String:s->c[3]], kPrefSelection,
 		palette_of(s), kPrefPalette,
 		s->name, kPrefScheme,
-		[NSNumber numberWithFloat:1.0f], kPrefOpacity,
+		[NSNumber numberWithFloat:0.75f], kPrefOpacity,	/* translucent out of the box */
 		[NSNumber numberWithBool:NO], kPrefBlur,
 		[NSNumber numberWithFloat:6], kPrefBlurRadius,
 		[NSNumber numberWithInt:CursorBlock], kPrefCursorShape,
@@ -69,6 +88,7 @@ void prefs_register(void)
 		nil];
 
 	[[NSUserDefaults standardUserDefaults] registerDefaults:d];
+	prefs_migrate();
 }
 
 /* The Font default if installed, else Hack Nerd Font Mono where it is
