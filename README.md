@@ -22,7 +22,11 @@ Build natively on a board (Apple's gcc-4.2: Objective-C and the 10.5 SDK):
     make            # -> build/Term.app
     cp -R build/Term.app /Applications/
 
+Cmd-N opens another window (each its own shell and pty), cascaded.
+
 Defaults: `defaults write org.xnu-t4240.term Font Monaco`, `FontSize 12`.
+With no `Font` set, or one that is not installed, Term takes Hack Nerd Font
+Mono if it is in a Fonts folder and Monaco if not.
 `Font` is the **PostScript** name, not the file or family name: an unknown
 name silently falls back to a proportional system face (which shows as wide
 gaps between letters).
@@ -47,11 +51,12 @@ window behind the others; `kill -USR1 <pid>` writes the next frame to
 `/tmp/term-frame.png`; `TERM_TEST_SELECT="line col line col unit"` (unit 1
 cell, 2 word, 3 line) makes that selection at the dump and prints what Copy
 would take to stdout, so the clipboard is never touched.
-`proving-ground/board/termtest.sh` drives all three, and passes `TERM_ARGS`
+`TERM_TEST_WINDOWS=n` opens n windows at launch.
+`proving-ground/board/termtest.sh` drives all four, and passes `TERM_ARGS`
 (e.g. `-Font HackNFM-Regular`) through.
 
 Measured on board 1, 2026-11-08: btop 1.4.8 draws all panels, 24 CPU
 threads, truecolor theme, braille meters and box-drawn frames.
 
-Not yet: multiple windows/tabs, combining characters drawn over their base,
+Not yet: tabs, combining characters drawn over their base,
 colour emoji, a preferences window.
