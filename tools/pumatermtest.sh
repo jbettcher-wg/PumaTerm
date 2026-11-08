@@ -6,18 +6,22 @@
 #
 # The test copy runs from /tmp/PumaTermTest.app, never /Applications, and
 # only processes running from that path are killed: the user's own
-# PumaTerm windows are left alone. (Until 2026-11-08 this killed every
-# pumaterm process, which closed the user's sessions.)
+# PumaTerm windows are left alone.
+#
+# Usage, as root on the Mac (over ssh is the point): put build/PumaTerm.app
+# in /tmp/PumaTerm.app.tgz and the text to type in /tmp/pumatermtest.input,
+# then `WAIT=8 sh pumatermtest.sh`. TEST_USER is the console user by default.
 APP=/tmp/PumaTermTest.app
+TEST_USER=${TEST_USER:-$(stat -f %Su /dev/console)}
 testpids() { ps -axo pid=,comm= | awk -v p="$APP/Contents/MacOS/pumaterm" '$2 == p {print $1}'; }
 for p in $(testpids); do kill $p; done
 sleep 1
 rm -rf $APP /tmp/ptt.$$ && mkdir /tmp/ptt.$$ && tar xzf /tmp/PumaTerm.app.tgz -C /tmp/ptt.$$ && \
-	mv /tmp/ptt.$$/PumaTerm.app $APP && rmdir /tmp/ptt.$$ && chown -R jbettcher:admin $APP
+	mv /tmp/ptt.$$/PumaTerm.app $APP && rmdir /tmp/ptt.$$ && chown -R $TEST_USER $APP
 rm -f /tmp/pumaterm-frame.png /tmp/pumaterm-window.png
-FINDER=$(ps -axo pid=,user=,comm= | awk '$2=="jbettcher" && $3 ~ /Finder$/ {print $1}' | head -1)
+FINDER=$(ps -axo pid=,user=,comm= | awk -v u="$TEST_USER" '$2==u && $3 ~ /Finder$/ {print $1}' | head -1)
 INPUT=$(cat /tmp/pumatermtest.input)
-launchctl bsexec "$FINDER" sudo -u jbettcher -H env PUMATERM_STARTUP_INPUT="$INPUT" \
+launchctl bsexec "$FINDER" sudo -u $TEST_USER -H env PUMATERM_STARTUP_INPUT="$INPUT" \
 	PUMATERM_TEST_SELECT="$PUMATERM_TEST_SELECT" PUMATERM_TEST_WINDOWS="$PUMATERM_TEST_WINDOWS" \
 	PUMATERM_TEST_TABS="$PUMATERM_TEST_TABS" PUMATERM_TEST_PREFS="$PUMATERM_TEST_PREFS" \
 	PUMATERM_TEST_LIVE="$PUMATERM_TEST_LIVE" PUMATERM_TEST_FOCUS="$PUMATERM_TEST_FOCUS" PUMATERM_NO_GL="$PUMATERM_NO_GL" PUMATERM_TEST_ABOUT="$PUMATERM_TEST_ABOUT" \

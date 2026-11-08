@@ -1,5 +1,5 @@
 # pumaterm -- a GL-accelerated terminal for Mac OS X 10.5 (PowerPC).
-# Built natively on the boards with Apple's gcc-4.2 (Objective-C + 10.5 SDK).
+# Built natively on Mac OS X 10.5 with Apple's gcc-4.2 (Objective-C + 10.5 SDK).
 #   make            -> build/PumaTerm.app
 #   make install    -> /Applications/PumaTerm.app
 #   make run        -> open it (needs the console user's WindowServer)

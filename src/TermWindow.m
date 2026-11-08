@@ -15,7 +15,7 @@
 
 /*
  * Blurring what is behind a translucent window: CoreGraphics' private
- * window filters, which 10.5 exports (measured with nm on board 1:
+ * window filters, which 10.5 exports (measured with nm on 10.5.8:
  * CGSNewCIFilterByName, CGSAddWindowFilter, CGSSetCIFilterValuesFromDictionary)
  * and which iTerm used on 10.5 before 10.6 gave it a background blur radius.
  * Flags 0x3001 apply the filter to the backdrop rather than the window.

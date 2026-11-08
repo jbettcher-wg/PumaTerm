@@ -90,7 +90,7 @@ int pty_spawn(int rows, int cols, const char *command, pid_t *pid)
 	/* Blocking, deliberately: NSFileHandle's background read reports an
 	 * EAGAIN on a non-blocking fd as a zero-length read, which is how EOF
 	 * looks, and the first version closed its window at once (measured on
-	 * board 1, 2026-11-08). The read runs on its own thread anyway. */
+	 * 10.5.8, 2026-11-08). The read runs on its own thread anyway. */
 	fcntl(master, F_SETFD, FD_CLOEXEC);
 	*pid = p;
 	return master;
